@@ -1193,7 +1193,15 @@ function bind() {
     document.body.classList.remove('sidebar-open'); el.btnToggleSidebar.setAttribute('aria-expanded', 'false');
   });
   document.querySelectorAll('.tool-menu').forEach((menu) => {
-    menu.addEventListener('toggle', () => { if (menu.open) { closeMenus(menu); positionToolPanels(); } });
+    menu.addEventListener('toggle', () => {
+      if (menu.open) {
+        closeMenus(menu);
+        positionToolPanels();
+        // Device metrics/IME changes settle after the details toggle; refresh
+        // once after the visual viewport reports its final height.
+        setTimeout(positionToolPanels, 80);
+      }
+    });
   });
   window.addEventListener('resize', positionToolPanels);
   if (window.visualViewport) {

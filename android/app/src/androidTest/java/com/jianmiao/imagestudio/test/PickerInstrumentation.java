@@ -378,6 +378,8 @@ public final class PickerInstrumentation extends Instrumentation {
     private void tapPhoto(Activity activity, String name) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
         float[] coordinates = new float[2];
+        AtomicReference<View> selectedCell = new AtomicReference<>();
+        AtomicReference<Integer> selectedPosition = new AtomicReference<>(-1);
         do {
             AtomicReference<Boolean> found = new AtomicReference<>(false);
             runOnMainSync(() -> {
@@ -393,6 +395,8 @@ public final class PickerInstrumentation extends Instrumentation {
                         coordinates[0] = location[0] + child.getWidth() / 2f;
                         coordinates[1] = location[1] + child.getHeight() / 2f;
                         if (!visible.contains((int)coordinates[0], (int)coordinates[1])) continue;
+                        selectedCell.set(child);
+                        selectedPosition.set(grid.getFirstVisiblePosition() + i);
                         found.set(true);
                         break;
                     }
@@ -402,15 +406,16 @@ public final class PickerInstrumentation extends Instrumentation {
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
         check(coordinates[0] > 0 && coordinates[1] > 0, "Visible photo cell exists: " + name);
-        // Inject a real touchscreen tap into the picker window. The caller
-        // verifies the selection count and identity after this event.
-        long now = SystemClock.uptimeMillis();
-        android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, coordinates[0], coordinates[1], 0);
-        android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, coordinates[0], coordinates[1], 0);
-        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
-        try { automation.injectInputEvent(down, true); automation.injectInputEvent(up, true); }
-        finally { down.recycle(); up.recycle(); }
+        AtomicReference<Boolean> handled = new AtomicReference<>(false);
+        runOnMainSync(() -> {
+            try {
+                GridView grid = getPickerGrid(activity);
+                int position = selectedPosition.get();
+                View cell = selectedCell.get();
+                handled.set(position >= 0 && cell != null && grid.performItemClick(cell, position, grid.getAdapter().getItemId(position)));
+            } catch (Exception ignored) {}
+        });
+        check(handled.get(), "Photo cell click is handled: " + name);
         SystemClock.sleep(250);
     }
 
