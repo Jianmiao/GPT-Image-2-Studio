@@ -280,7 +280,7 @@ function closeMenus(except = null) {
 // and a growing prompt; fixed coordinates keep them out of the scrolling toolbar.
 function positionToolPanels() {
   if (!el.composer) return;
-  requestAnimationFrame(() => {
+  {
     const rect = el.composer.getBoundingClientRect();
     const viewport = window.visualViewport;
     // Headless Chromium can expose visualViewport.height as 0 during a metrics
@@ -311,7 +311,7 @@ function positionToolPanels() {
         panel.style.setProperty('max-height', room + 'px', 'important');
       });
     }
-  });
+  }
 }
 
 function pickReferenceImages() {
