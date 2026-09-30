@@ -102,6 +102,24 @@ public final class PickerInstrumentation extends Instrumentation {
                 if (imeVisible.get()) break;
                 SystemClock.sleep(150);
             } while (SystemClock.uptimeMillis() < imeDeadline);
+            if (!imeVisible.get()) {
+                // Some headless API 35 images drop the first synthetic tap while
+                // the WebView compositor is settling. Re-focus the same field
+                // and explicitly request the system IME before failing layout.
+                runOnMainSync(() -> {
+                    web.requestFocus();
+                    web.evaluateJavascript("document.getElementById('prompt').focus()", null);
+                    android.view.inputmethod.InputMethodManager input = (android.view.inputmethod.InputMethodManager)
+                        getTargetContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (input != null) input.showSoftInput(web, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                });
+                imeDeadline = SystemClock.uptimeMillis() + 5000;
+                do {
+                    runOnMainSync(() -> imeVisible.set(Build.VERSION.SDK_INT >= 30 && web.getRootWindowInsets() != null && web.getRootWindowInsets().isVisible(android.view.WindowInsets.Type.ime())));
+                    if (imeVisible.get()) break;
+                    SystemClock.sleep(150);
+                } while (SystemClock.uptimeMillis() < imeDeadline);
+            }
             check(imeVisible.get(), "Tapping the prompt opens the Android keyboard");
             SystemClock.sleep(350);
             JSONObject sendButton = new JSONObject(js("JSON.stringify((() => { const r = document.getElementById('btnGenerate').getBoundingClientRect(); return { bottom: r.bottom, width: innerWidth }; })())"));

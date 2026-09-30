@@ -303,6 +303,14 @@ function positionToolPanels() {
       : viewportTop + 12;
     document.documentElement.style.setProperty('--tool-panel-top', panelTop + 'px');
     document.documentElement.style.setProperty('--tool-panel-max-height', room + 'px');
+    if (window.innerWidth <= 1030) {
+      document.querySelectorAll('.tool-menu[open] .tool-panel').forEach((panel) => {
+        panel.style.position = 'fixed';
+        panel.style.top = panelTop + 'px';
+        panel.style.bottom = 'auto';
+        panel.style.maxHeight = room + 'px';
+      });
+    }
   });
 }
 
