@@ -349,3 +349,11 @@ select[size] option { padding: 8px; }
     max-height: calc(100dvh - 24px) !important;
   }
 }
+
+@media (max-width: 1030px) {
+  .tool-menu[open] .tool-panel {
+    top: var(--tool-panel-top, 12px) !important;
+    bottom: auto !important;
+    max-height: min(var(--tool-panel-max-height, 460px), calc(100dvh - 24px)) !important;
+  }
+}

@@ -380,6 +380,7 @@ public final class PickerInstrumentation extends Instrumentation {
         float[] coordinates = new float[2];
         AtomicReference<View> selectedCell = new AtomicReference<>();
         AtomicReference<Integer> selectedPosition = new AtomicReference<>(-1);
+        AtomicReference<Object> selectedPhoto = new AtomicReference<>();
         do {
             AtomicReference<Boolean> found = new AtomicReference<>(false);
             runOnMainSync(() -> {
@@ -397,6 +398,7 @@ public final class PickerInstrumentation extends Instrumentation {
                         if (!visible.contains((int)coordinates[0], (int)coordinates[1])) continue;
                         selectedCell.set(child);
                         selectedPosition.set(grid.getFirstVisiblePosition() + i);
+                        selectedPhoto.set(grid.getAdapter().getItem(selectedPosition.get()));
                         found.set(true);
                         break;
                     }
@@ -412,9 +414,8 @@ public final class PickerInstrumentation extends Instrumentation {
             try {
                 GridView grid = getPickerGrid(activity);
                 int position = selectedPosition.get();
-                View cell = selectedCell.get();
-                if (position < 0 || cell == null) return;
-                Object photo = grid.getAdapter().getItem(position);
+                Object photo = selectedPhoto.get();
+                if (position < 0 || photo == null) return;
                 Dialog picker = getPickerDialog(activity);
                 java.lang.reflect.Method toggle = picker.getClass().getDeclaredMethod("toggleSelection", photo.getClass());
                 toggle.setAccessible(true);
