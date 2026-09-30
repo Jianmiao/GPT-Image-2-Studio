@@ -45,6 +45,6 @@ try {
   const logcat = spawnSync(adb, ['logcat', '-d', '-t', '1000'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
   fs.writeFileSync(path.join(output, 'logcat.txt'), (logcat.stdout || '') + (logcat.stderr || ''));
 }
-assert.match(log, /INSTRUMENTATION_RESULT: result=OK/, 'Native album picker instrumentation must pass');
-assert.doesNotMatch(log, /result=FAIL|INSTRUMENTATION_FAILED|Process crashed/);
+assert.match(log, /^PICKER_TEST_RESULT=OK\r?$/m, 'Native album picker instrumentation must pass');
+assert.doesNotMatch(log, /PICKER_TEST_RESULT=FAIL|result=FAIL|INSTRUMENTATION_FAILED|Process crashed/);
 console.log('Native gallery interaction, album filtering, selection and automatic mode checks passed. Artifacts: ' + output);

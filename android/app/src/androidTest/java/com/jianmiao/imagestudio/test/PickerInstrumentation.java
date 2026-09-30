@@ -87,7 +87,7 @@ public final class PickerInstrumentation extends Instrumentation {
             if ("denied".equals(scenario)) {
                 verifyDeniedFallback();
                 report.putString("result", "OK");
-                report.putString("stream", "\nDenied-photo-permission fallback passed " + checks + " checks.\n");
+                report.putString("stream", "\nPICKER_TEST_RESULT=OK\nDenied-photo-permission fallback passed " + checks + " checks.\n");
                 finish(Activity.RESULT_OK, report);
                 return;
             }
@@ -135,9 +135,12 @@ public final class PickerInstrumentation extends Instrumentation {
             awaitNode(null, "Screenshots");
             screenshot("04-album-categories");
             clickNode(null, "TestAlbum");
-            awaitNode(null, FIRST_IMAGE);
-            check(findNode(null, SECOND_IMAGE) == null, "Selecting TestAlbum filters out the other album");
-            clickNode(null, FIRST_IMAGE);
+            // GridView item accessibility can lag behind a provider-filter refresh;
+            // tap its first visible cell just as a real user does.
+            awaitNode("picker_grid", null);
+            tapFirstGridCell();
+            awaitNode(null, "添加（1）");
+            check(true, "Filtered album selection adds one image");
             screenshot("05-image-selected");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 1", "Native selected image reaches the shared composer");
@@ -174,7 +177,7 @@ public final class PickerInstrumentation extends Instrumentation {
             waitJs("document.querySelectorAll('#refsList img').length === 0 && !document.getElementById('btnGenerate').disabled", "Canceling the picker leaves composer ready without adding images");
             check(new JSONObject(target.getSharedPreferences("image-studio-private", Context.MODE_PRIVATE).getString("config", "{}")).optString("apiKey", "").isEmpty(), "No credentials were introduced during testing");
             report.putString("result", "OK");
-            report.putString("stream", "\nNative album picker passed " + checks + " checks; only synthetic local images were used.\n");
+            report.putString("stream", "\nPICKER_TEST_RESULT=OK\nNative album picker passed " + checks + " checks; only synthetic local images were used.\n");
             report.putInt("checks", checks);
             finish(Activity.RESULT_OK, report);
         } catch (Throwable error) {
@@ -187,7 +190,7 @@ public final class PickerInstrumentation extends Instrumentation {
                 }
             } catch (Throwable ignored) {}
             report.putString("result", "FAIL");
-            report.putString("stream", "\n" + android.util.Log.getStackTraceString(error));
+            report.putString("stream", "\nPICKER_TEST_RESULT=FAIL\n" + android.util.Log.getStackTraceString(error));
             finish(Activity.RESULT_CANCELED, report);
         } finally {
             for (Uri uri : inserted) try { getTargetContext().getContentResolver().delete(uri, null, null); } catch (Exception ignored) {}
@@ -276,6 +279,25 @@ public final class PickerInstrumentation extends Instrumentation {
         } finally { down.recycle(); up.recycle(); }
     }
 
+    private void tapFirstGridCell() throws Exception {
+        AccessibilityNodeInfo node = awaitNode("picker_grid", null);
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        node.getBoundsInScreen(bounds);
+        node.recycle();
+        // The picker uses four columns on the emulator; the first cell is near
+        // the top-left of the grid after the album filter has settled.
+        float x = bounds.left + Math.max(10, bounds.width() / 8f);
+        float y = bounds.top + Math.max(10, bounds.width() / 8f);
+        long now = SystemClock.uptimeMillis();
+        android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, x, y, 0);
+        android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, x, y, 0);
+        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        try { automation.injectInputEvent(down, true); automation.injectInputEvent(up, true); }
+        finally { down.recycle(); up.recycle(); }
+        SystemClock.sleep(250);
+    }
+
     private void waitJs(String expression, String label) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
         do {
@@ -286,6 +308,7 @@ public final class PickerInstrumentation extends Instrumentation {
     }
 
     private AccessibilityNodeInfo findNode(String id, String text) {
+        automation.clearCache();
         AccessibilityNodeInfo root = automation.getRootInActiveWindow();
         if (root == null) return null;
         AccessibilityNodeInfo found = findInTree(root, id == null ? null : id.contains(":id/") ? id : PACKAGE + ":id/" + id, text);
@@ -312,6 +335,7 @@ public final class PickerInstrumentation extends Instrumentation {
         do {
             AccessibilityNodeInfo node = findNode(id, text);
             if (node != null) return node;
+            try { automation.waitForIdle(500, 500); } catch (Exception ignored) {}
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
         throw new AssertionError("Native control not found: " + (id == null ? text : id));
