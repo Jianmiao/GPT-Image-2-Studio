@@ -156,6 +156,7 @@ public final class PickerInstrumentation extends Instrumentation {
             clickNode("picker_albums", null);
             clickNode(null, "Screenshots");
             awaitNode("picker_grid", null);
+            SystemClock.sleep(700);
             tapFirstGridCell();
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 2", "Selections across albums are both returned");

@@ -89,7 +89,7 @@ public final class NativeApi {
             if (!path.startsWith("/api/") || uri.getHost() != null) return new Result(403, object("error", "拒绝非本地 API 请求"));
             String route = method + " " + uri.getPath();
             switch (route) {
-                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.0"));
+                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.1"));
                 case "GET /api/config": return new Result(200, publicConfig(config()));
                 case "POST /api/config": return new Result(200, saveConfig(input));
                 case "POST /api/endpoints": return new Result(200, endpoints(merged(input)));
