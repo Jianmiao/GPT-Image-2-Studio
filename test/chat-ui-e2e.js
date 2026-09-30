@@ -143,7 +143,18 @@ function closeServer(server) {
     const activePort = path.join(profile, 'DevToolsActivePort');
     for (let i = 0; i < 100 && !fs.existsSync(activePort); i++) await pause(100);
     assert.ok(fs.existsSync(activePort), 'Browser debugging port must start');
-    const [port, socketPath] = fs.readFileSync(activePort, 'utf8').trim().split(/\r?\n/);
+    let activeText = '';
+    for (let i = 0; i < 30; i++) {
+      try {
+        activeText = fs.readFileSync(activePort, 'utf8');
+        if (activeText.trim()) break;
+      } catch (error) {
+        if (error.code !== 'EBUSY' && error.code !== 'ENOENT') throw error;
+      }
+      await pause(100);
+    }
+    assert.ok(activeText.trim(), 'Browser debugging port file must be readable');
+    const [port, socketPath] = activeText.trim().split(/\r?\n/);
     cdp = await cdpClient('ws://127.0.0.1:' + port + socketPath);
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });

@@ -413,11 +413,16 @@ public final class PickerInstrumentation extends Instrumentation {
                 int position = selectedPosition.get();
                 View cell = selectedCell.get();
                 if (position < 0 || cell == null) return;
-                java.lang.reflect.Method toggle = grid.getAdapter().getClass().getEnclosingClass().getDeclaredMethod("toggleSelection", grid.getAdapter().getItem(position).getClass());
+                Object photo = grid.getAdapter().getItem(position);
+                java.lang.reflect.Method toggle = null;
+                for (java.lang.reflect.Method candidate : grid.getAdapter().getClass().getEnclosingClass().getDeclaredMethods()) {
+                    if (candidate.getName().equals("toggleSelection") && candidate.getParameterTypes().length == 1) { toggle = candidate; break; }
+                }
+                if (toggle == null) return;
                 toggle.setAccessible(true);
-                toggle.invoke(getPickerDialog(activity), grid.getAdapter().getItem(position));
+                toggle.invoke(getPickerDialog(activity), photo);
                 handled.set(true);
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) { }
         });
         check(handled.get(), "Photo cell click is handled: " + name);
         SystemClock.sleep(250);
