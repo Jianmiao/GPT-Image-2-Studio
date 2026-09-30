@@ -65,6 +65,17 @@
 .sidebar-collapsed .sidebar{visibility:hidden}
 @media(max-width:760px){.sidebar{visibility:hidden}.sidebar-open .sidebar{visibility:visible}}
 
+/* Keep an open parameter sheet inside the reduced visual viewport when the
+   software keyboard is visible. */
+@media(max-width:760px){
+  .model-menu .tool-panel,.size-menu .tool-panel,.style-menu .tool-panel,
+  .template-menu .tool-panel,.more-menu .tool-panel{
+    top: max(12px, env(safe-area-inset-top));
+    bottom: auto;
+    max-height: calc(100dvh - 24px);
+  }
+}
+
 /* Readable controls and an attachment-first composer on every device. */
 body { font-size: 15px; }
 .mobile-upload-hint { display: none; }
@@ -222,7 +233,7 @@ select[size] option { padding: 8px; }
     bottom: auto;
     width: auto;
     max-width: 540px;
-    max-height: var(--tool-panel-max-height, calc(100dvh - 300px));
+    max-height: min(var(--tool-panel-max-height, calc(100dvh - 300px)), calc(100dvh - 24px));
     margin-left: auto;
     margin-right: auto;
     padding: 19px;

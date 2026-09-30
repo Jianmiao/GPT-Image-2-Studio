@@ -296,8 +296,9 @@ function positionToolPanels() {
     const layoutHeight = Math.max(visibleHeight, window.innerHeight || visibleHeight);
     const viewportTop = Math.max(0, Math.min(rawViewportTop, Math.max(0, layoutHeight - visibleHeight)));
     const roomAbove = rect.top - viewportTop - 24;
-    const room = roomAbove >= 180 ? Math.min(460, roomAbove) : Math.max(80, visibleHeight - 24);
-    const panelTop = roomAbove >= 180
+    const composerVisible = rect.top <= viewportTop + visibleHeight;
+    const room = roomAbove >= 180 && composerVisible ? Math.min(460, roomAbove) : Math.max(80, visibleHeight - 24);
+    const panelTop = roomAbove >= 180 && composerVisible
       ? Math.max(viewportTop + 12, rect.top - room - 12)
       : viewportTop + 12;
     document.documentElement.style.setProperty('--tool-panel-top', panelTop + 'px');
