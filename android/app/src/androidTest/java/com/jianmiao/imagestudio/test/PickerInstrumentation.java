@@ -407,6 +407,7 @@ public final class PickerInstrumentation extends Instrumentation {
         } while (SystemClock.uptimeMillis() < deadline);
         check(coordinates[0] > 0 && coordinates[1] > 0, "Visible photo cell exists: " + name);
         AtomicReference<Boolean> handled = new AtomicReference<>(false);
+        AtomicReference<String> clickError = new AtomicReference<>();
         runOnMainSync(() -> {
             try {
                 GridView grid = getPickerGrid(activity);
@@ -414,17 +415,14 @@ public final class PickerInstrumentation extends Instrumentation {
                 View cell = selectedCell.get();
                 if (position < 0 || cell == null) return;
                 Object photo = grid.getAdapter().getItem(position);
-                java.lang.reflect.Method toggle = null;
-                for (java.lang.reflect.Method candidate : getPickerDialog(activity).getClass().getDeclaredMethods()) {
-                    if (candidate.getName().equals("toggleSelection") && candidate.getParameterTypes().length == 1) { toggle = candidate; break; }
-                }
-                if (toggle == null) return;
+                Dialog picker = getPickerDialog(activity);
+                java.lang.reflect.Method toggle = picker.getClass().getDeclaredMethod("toggleSelection", photo.getClass());
                 toggle.setAccessible(true);
-                toggle.invoke(getPickerDialog(activity), photo);
+                toggle.invoke(picker, photo);
                 handled.set(true);
-            } catch (Exception ignored) { }
+            } catch (Throwable error) { clickError.set(android.util.Log.getStackTraceString(error)); }
         });
-        check(handled.get(), "Photo cell click is handled: " + name);
+        check(handled.get(), "Photo cell click is handled: " + name + (clickError.get() == null ? "" : "\n" + clickError.get()));
         SystemClock.sleep(250);
     }
 

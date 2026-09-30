@@ -340,3 +340,12 @@ select[size] option { padding: 8px; }
   .inspiration-chip { min-height: 72px; }
   .composer-caption { display: none; }
 }
+
+/* Top-layer menu fallback for IME-reduced visual viewports. */
+@media (max-width: 760px) {
+  .tool-menu[open] .tool-panel {
+    top: max(12px, env(safe-area-inset-top)) !important;
+    bottom: auto !important;
+    max-height: calc(100dvh - 24px) !important;
+  }
+}
