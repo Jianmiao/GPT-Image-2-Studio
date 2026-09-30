@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="picker_grid" type="id" />
+    <item name="picker_albums" type="id" />
+    <item name="picker_expand" type="id" />
+    <item name="picker_confirm" type="id" />
+    <item name="picker_close" type="id" />
+    <item name="picker_title" type="id" />
+    <item name="picker_files" type="id" />
+    <item name="picker_permission_hint" type="id" />
+</resources>

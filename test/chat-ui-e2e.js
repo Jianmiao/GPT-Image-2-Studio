@@ -10,6 +10,7 @@ const path = require('node:path');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { makePng } = require('./png');
+const autoModeOnly = process.argv.includes('--auto-mode-only');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gptimage2-chat-ui-'));
 const dataDir = path.join(root, 'data');
@@ -192,10 +193,16 @@ function closeServer(server) {
       await waitFor('document.querySelectorAll("#results .result-media img").length > 0 && !document.querySelector("#results [data-role=live]") && !document.getElementById("btnGenerate").disabled', label);
       assert.equal(await evaluate('document.querySelectorAll("#results [data-role=live]").length'), 0, 'Finished requests remove live placeholders');
     };
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `localStorage.setItem('gptimage2.ui.v1', JSON.stringify({ mode: 'edit' }));` });
     await send('Page.navigate', { url: started.url });
     await waitFor('document.getElementById("btnSettings") && document.getElementById("baseUrl").value.startsWith("http://127.0.0.1:")', 'UI ready');
     await waitFor('!document.getElementById("btnFetchModels").disabled && document.querySelectorAll("#modelSelect option:not(:disabled)").length === 2', 'Initial models loaded');
     await evaluate('if (document.getElementById("helpModal")) document.getElementById("helpModal").hidden = true');
+    assert.equal(await evaluate('document.getElementById("refs").hidden'), true, 'A stale saved edit mode without uploaded images must start as text generation');
+    assert.equal(await evaluate('document.querySelectorAll(".tab[data-mode]").length'), 0, 'Image mode is inferred from attachments, without manual mode tabs');
+    assert.match(await evaluate('document.getElementById("generationModeLabel").textContent'), /文生图/);
+    console.log('PASS stale saved edit mode is ignored; mode derives from attachments');
+    if (autoModeOnly) return;
     assert.equal(await evaluate('document.getElementById("settingsModal").hidden'), true, 'Settings hidden by default');
     await shot('desktop-empty');
 
@@ -305,7 +312,30 @@ function closeServer(server) {
     assert.equal(postCount() - before, 1, 'Image edit sends once');
     assert.equal(edit.url, '/v1/images/edits');
     assert.match(edit.contentType, /multipart\/form-data/);
+    assert.match(await evaluate('document.getElementById("generationModeLabel").textContent'), /图生图/);
     console.log('PASS upload auto-switch and multipart edit');
+
+    await click('#refsList .ref-del');
+    assert.equal(await evaluate('document.getElementById("refs").hidden'), true, 'Removing the final reference hides the reference section');
+    assert.match(await evaluate('document.getElementById("generationModeLabel").textContent'), /文生图/);
+    await fill('prompt', '本地测试：删除最后一张参考图后自动文生图');
+    before = postCount();
+    await click('#btnGenerate');
+    await success('Text generation after final reference removal');
+    assert.equal(postCount() - before, 1, 'Removing the last reference then generating sends once');
+    assert.equal(requests.filter((r) => r.method === 'POST').at(-1).url, '/v1/images/generations');
+    await send('DOM.setFileInputFiles', { nodeId, files: [refFile] });
+    await waitFor('document.querySelectorAll("#refsList img").length === 1', 'Reference re-added for clear test');
+    await click('#btnClearRefs');
+    assert.equal(await evaluate('document.getElementById("refs").hidden'), true, 'Clearing references hides the reference section');
+    assert.match(await evaluate('document.getElementById("generationModeLabel").textContent'), /文生图/);
+    await fill('prompt', '本地测试：清空参考图后自动文生图');
+    before = postCount();
+    await click('#btnGenerate');
+    await success('Text generation after clearing references');
+    assert.equal(postCount() - before, 1, 'Clearing references then generating sends once');
+    assert.equal(requests.filter((r) => r.method === 'POST').at(-1).url, '/v1/images/generations');
+    console.log('PASS removing the final image and clearing images automatically restore text generation');
 
     await click('#btnNewChat');
     await fill('prompt', '本地测试：阻止双击和快捷键重复提交');
@@ -346,7 +376,27 @@ function closeServer(server) {
     await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
     await pause(150);
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile page must not overflow horizontally');
+    const mobileFont = await evaluate(`({ prompt: parseFloat(getComputedStyle(document.getElementById('prompt')).fontSize), options: [...document.querySelectorAll('.tool-menu > summary')].map(e => ({ title: e.title, size: parseFloat(getComputedStyle(e).fontSize) })), targets: ['btnPickFiles', 'btnGenerate', 'btnToggleSidebar'].map(id => { const r = document.getElementById(id).getBoundingClientRect(); return { id, width: r.width, height: r.height }; }) })`);
+    assert.ok(mobileFont.prompt >= 16, 'Mobile prompt font must be at least 16px: ' + JSON.stringify(mobileFont));
+    assert.ok(mobileFont.options.every(e => e.size >= 14), 'Mobile options must be at least 14px: ' + JSON.stringify(mobileFont));
+    assert.ok(mobileFont.targets.every(e => e.width >= 44 && e.height >= 44), 'Primary mobile touch targets must be at least 44px: ' + JSON.stringify(mobileFont));
+    assert.doesNotMatch(await evaluate('document.querySelector(".composer").innerText'), /Ctrl\s*\+?\s*V|拖拽|拖入|拖动/, 'Mobile composer must show touch-first instructions');
     await shot('mobile-empty');
+    await send('DOM.setFileInputFiles', { nodeId, files: [refFile] });
+    await waitFor('document.querySelectorAll("#refsList img").length === 1', 'Mobile reference loaded');
+    assert.doesNotMatch(await evaluate('document.querySelector(".composer").innerText'), /Ctrl\s*\+?\s*V|拖拽|拖入|拖动/, 'Mobile reference section must not instruct dragging or Ctrl+V');
+    await shot('mobile-reference');
+    await click('#btnClearRefs');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 420, deviceScaleFactor: 1, mobile: true });
+    for (const menu of ['model', 'size', 'style', 'template', 'more']) {
+      await evaluate(`document.querySelectorAll('details[open]').forEach(e => e.open = false); document.querySelector('.${menu}-menu > summary').click()`);
+      await pause(100);
+      const bounds = await evaluate(`(() => { const p = document.querySelector('.${menu}-menu .tool-panel'); const r = p.getBoundingClientRect(); const center = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, fits: r.left >= 0 && r.right <= innerWidth + 1 && r.top >= 0 && r.bottom <= innerHeight + 1, visible: p.contains(center) }; })()`);
+      assert.ok(bounds.fits && bounds.visible, 'Mobile keyboard-height viewport ' + menu + ' menu stays visible: ' + JSON.stringify(bounds));
+    }
+    await evaluate('document.querySelectorAll("details[open]").forEach(e => e.open = false)');
+    await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+    console.log('PASS mobile option panels fit when the keyboard reduces viewport height');
     await click('#btnToggleSidebar');
     await click('#btnSettings');
     await shot('mobile-settings');

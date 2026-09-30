@@ -17,7 +17,7 @@ const el = {
   method: $('method'), editEndpoint: $('editEndpoint'), timeoutSeconds: $('timeoutSeconds'), moderation: $('moderation'),
   streamUpstream: $('streamUpstream'),
   btnResetParams: $('btnResetParams'),
-  tabs: Array.from(document.querySelectorAll('.tab')), modeNote: $('modeNote'),
+  modeNote: $('modeNote'), generationModeLabel: $('generationModeLabel'),
   refs: $('refs'), refsList: $('refsList'), refCount: $('refCount'), dropZone: $('dropZone'),
   fileInput: $('fileInput'), btnPickFiles: $('btnPickFiles'), btnClearRefs: $('btnClearRefs'),
   prompt: $('prompt'), promptLen: $('promptLen'), btnClearPrompt: $('btnClearPrompt'), btnGenerate: $('btnGenerate'),
@@ -55,7 +55,6 @@ const TEMPLATES = [
 ];
 
 const state = {
-  mode: 'text',
   refs: [],              // [{ dataUrl, name, bytes }]
   imageModels: [],       // 自动筛出的图像模型
   allModels: [],         // 全量模型
@@ -185,16 +184,17 @@ function selectedSize() {
   return state.appliedSize;
 }
 
-/** 界面偏好：生成模式与风格；供应商和图像参数以服务端配置为准。 */
+/** 只保存风格偏好；生成方式始终由当前参考图决定。 */
 function persistUi() {
-  try { localStorage.setItem(LS_KEY, JSON.stringify({ mode: state.mode, style: state.style })); } catch (_) {}
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ style: state.style })); } catch (_) {}
 }
 
 function restoreUi() {
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch (_) {}
-  if (saved && saved.mode) setMode(saved.mode);
   if (saved && STYLES.some((s) => s.id === saved.style)) state.style = saved.style;
+  // 旧版本记录过 mode:edit，但参考图并不跨次保存，不能恢复成空图改图。
+  persistUi();
 }
 
 const MODE_NOTES = {
@@ -202,19 +202,19 @@ const MODE_NOTES = {
   edit: '可以用「图1」「图2」指定参考图，并描述想修改的内容'
 };
 
-function setMode(mode) {
-  state.mode = mode === 'edit' ? 'edit' : 'text';
-  el.tabs.forEach((t) => {
-    t.classList.toggle('is-active', t.dataset.mode === state.mode);
-    t.setAttribute('aria-selected', String(t.dataset.mode === state.mode));
-  });
-  el.refs.hidden = state.mode !== 'edit';
-  el.modeNote.textContent = MODE_NOTES[state.mode];
-  el.prompt.placeholder = state.mode === 'edit'
+function syncGenerationMode() {
+  const hasImages = state.refs.length > 0;
+  el.refs.hidden = !hasImages;
+  el.modeNote.textContent = MODE_NOTES[hasImages ? 'edit' : 'text'];
+  el.generationModeLabel.textContent = hasImages ? '图生图' : '文生图';
+  el.prompt.placeholder = hasImages
     ? '描述你想怎样修改参考图…'
     : '描述你想要的图片，让想象发生…';
-  if (state.mode === 'edit') updateRefs();
-  persistUi();
+  el.fileInput.dataset.remaining = String(Math.max(0, 10 - state.refs.length));
+  if (window.NativeBridge && typeof window.NativeBridge.setReferenceLimit === 'function') {
+    window.NativeBridge.setReferenceLimit(Math.max(0, 10 - state.refs.length));
+  }
+  positionToolPanels();
 }
 
 /* ───────────────────────────── 尺寸 ───────────────────────────── */
@@ -274,6 +274,32 @@ function syncToolbar() {
 
 function closeMenus(except = null) {
   document.querySelectorAll('.tool-menu[open]').forEach((menu) => { if (menu !== except) menu.open = false; });
+}
+
+// Position mobile menus above the whole composer, including reference images
+// and a growing prompt; fixed coordinates keep them out of the scrolling toolbar.
+function positionToolPanels() {
+  if (!el.composer) return;
+  requestAnimationFrame(() => {
+    const rect = el.composer.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportTop = viewport ? viewport.offsetTop : 0;
+    const visibleHeight = viewport ? viewport.height : window.innerHeight;
+    const roomAbove = rect.top - viewportTop - 24;
+    const room = roomAbove >= 180 ? roomAbove : Math.max(80, visibleHeight - 24);
+    const bottom = roomAbove >= 180 ? Math.max(12, window.innerHeight - rect.top + 10)
+      : Math.max(12, window.innerHeight - viewportTop - visibleHeight + 12);
+    document.documentElement.style.setProperty('--tool-panel-bottom', bottom + 'px');
+    document.documentElement.style.setProperty('--tool-panel-max-height', room + 'px');
+  });
+}
+
+function pickReferenceImages() {
+  if (state.busy || state.pendingUploads) return;
+  if (state.refs.length >= 10) { toast('已选满 10 张图片，请先移除一张', 'info'); return; }
+  closeMenus();
+  el.prompt.blur();
+  el.fileInput.click();
 }
 
 function showDialog(dialog, focusTarget) {
@@ -383,7 +409,6 @@ function newChat() {
   el.progressLog.replaceChildren();
   el.prompt.value = '';
   el.chatTitle.textContent = '新建图片';
-  setMode('text');
   updateRefs();
   updatePromptLen();
   renderArchive();
@@ -639,6 +664,8 @@ async function addFiles(files) {
   state.pendingUploads++;
   el.btnGenerate.disabled = true;
   el.btnNewChat.disabled = true;
+  el.btnClearRefs.disabled = true;
+  el.refsList.querySelectorAll('button').forEach((button) => { button.disabled = true; });
   let added = 0;
   try {
     for (const f of list) {
@@ -649,16 +676,18 @@ async function addFiles(files) {
         added++;
       } catch (e) { toast(e.message, 'err'); }
     }
-    if (state.refs.length && state.mode !== 'edit') setMode('edit');
     if (added) toast(`已添加 ${added} 张参考图`, 'ok', 2000);
   } finally {
     state.pendingUploads--;
     el.btnGenerate.disabled = state.busy || state.pendingUploads > 0;
     el.btnNewChat.disabled = state.busy || state.pendingUploads > 0;
+    el.btnClearRefs.disabled = state.busy || state.pendingUploads > 0;
+    el.refsList.querySelectorAll('button').forEach((button) => { button.disabled = state.busy || state.pendingUploads > 0; });
   }
 }
 
 function updateRefs() {
+  syncGenerationMode();
   el.refCount.textContent = String(state.refs.length);
   el.refsList.innerHTML = '';
   state.refs.forEach((r, i) => {
@@ -676,10 +705,10 @@ function updateRefs() {
     del.type = 'button';
     del.textContent = '×';
     del.title = '移除';
+    del.disabled = state.busy || state.pendingUploads > 0;
     del.addEventListener('click', () => {
-      if (state.busy) return;
+      if (state.busy || state.pendingUploads) return;
       state.refs.splice(i, 1);
-      if (!state.refs.length) setMode('text');
       updateRefs();
     });
     box.append(img, idx, del);
@@ -874,12 +903,11 @@ async function generate() {
     toast('请先选择或输入模型', 'err'); el.modelManual.closest('details').open = true; el.modelManual.focus(); return;
   }
   if (!el.prompt.value.trim()) { toast('请输入提示词', 'err'); el.prompt.focus(); return; }
-  if (state.mode === 'edit' && !state.refs.length) { toast('图生图模式请先添加参考图（或切回文生图）', 'warn'); return; }
 
   const chosenStyle = STYLES.find((s) => s.id === state.style) || STYLES[0];
   const prompt = el.prompt.value.trim();
   const styleHint = chosenStyle.prompt ? '\n\n画面风格：' + chosenStyle.prompt : '';
-  const refs = state.mode === 'edit' ? [...state.refs] : [];
+  const refs = [...state.refs];
   const payload = Object.assign({}, form, {
     prompt: styleHint && !prompt.endsWith(styleHint) ? prompt + styleHint : prompt,
     images: refs.map((r) => r.dataUrl),
@@ -1122,10 +1150,10 @@ function updatePromptLen() {
   el.promptLen.textContent = String(el.prompt.value.length);
   el.prompt.style.height = 'auto';
   el.prompt.style.height = Math.min(el.prompt.scrollHeight, 180) + 'px';
+  positionToolPanels();
 }
 
 function bind() {
-  el.tabs.forEach((t) => t.addEventListener('click', () => setMode(t.dataset.mode)));
 
   el.baseUrl.addEventListener('change', updateEndpointPreview);
   el.baseUrl.addEventListener('input', () => { clearTimeout(bind._t); bind._t = setTimeout(updateEndpointPreview, 400); });
@@ -1145,8 +1173,14 @@ function bind() {
     document.body.classList.remove('sidebar-open'); el.btnToggleSidebar.setAttribute('aria-expanded', 'false');
   });
   document.querySelectorAll('.tool-menu').forEach((menu) => {
-    menu.addEventListener('toggle', () => { if (menu.open) closeMenus(menu); });
+    menu.addEventListener('toggle', () => { if (menu.open) { closeMenus(menu); positionToolPanels(); } });
   });
+  window.addEventListener('resize', positionToolPanels);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', positionToolPanels);
+    window.visualViewport.addEventListener('scroll', positionToolPanels);
+  }
+  if (window.ResizeObserver) new ResizeObserver(positionToolPanels).observe(el.composer);
   document.addEventListener('click', (e) => { if (!e.target.closest('.tool-menu')) closeMenus(); });
   document.querySelectorAll('[data-template]').forEach((btn) => btn.addEventListener('click', () => useTemplate(btn.dataset.template)));
   el.btnProbeProxy.addEventListener('click', async () => {
@@ -1213,9 +1247,10 @@ function bind() {
     toast('参数已重置', 'ok', 1600);
   });
 
-  el.btnPickFiles.addEventListener('click', () => el.fileInput.click());
+  el.btnPickFiles.addEventListener('click', pickReferenceImages);
+  el.dropZone.addEventListener('click', pickReferenceImages);
   el.fileInput.addEventListener('change', async () => { await addFiles(el.fileInput.files); el.fileInput.value = ''; });
-  el.btnClearRefs.addEventListener('click', () => { state.refs = []; setMode('text'); updateRefs(); });
+  el.btnClearRefs.addEventListener('click', () => { if (state.busy || state.pendingUploads) return; state.refs = []; updateRefs(); });
 
   ['dragenter', 'dragover'].forEach((ev) => el.composer.addEventListener(ev, (e) => { e.preventDefault(); el.composer.classList.add('is-over'); }));
   ['dragleave', 'drop'].forEach((ev) => el.composer.addEventListener(ev, (e) => { e.preventDefault(); el.composer.classList.remove('is-over'); }));
@@ -1281,7 +1316,7 @@ async function boot() {
   updatePromptLen();
   renderCreativeOptions();
   await loadConfig();
-  setMode(state.mode);
+  updateRefs();
   syncToolbar();
   await loadHistory();
 

@@ -40,12 +40,15 @@ import java.util.concurrent.Executors;
 /** A local, offline-capable WebView UI backed by native Android storage and networking. */
 public final class MainActivity extends Activity {
     public static final String ORIGIN = "https://appassets.androidplatform.net";
-    private static final int PICK_IMAGES = 101, SAVE_IMAGE = 102;
+    private static final int PICK_IMAGES = 101, SAVE_IMAGE = 102, PHOTO_ACCESS = 103;
     private WebView web;
     private NativeApi api;
     private final ExecutorService workers = Executors.newFixedThreadPool(3);
     private final Set<String> seenRequests = Collections.synchronizedSet(new LinkedHashSet<>());
     private ValueCallback<Uri[]> fileCallback;
+    private PhotoPickerDialog photoPicker;
+    private volatile int referenceLimit = 10;
+    private int pickerLimit = 10;
     private volatile boolean trustedPage;
     private volatile boolean destroyed;
     private NativeApi.Download pendingExport;
@@ -56,15 +59,25 @@ public final class MainActivity extends Activity {
         web = new WebView(this);
         web.setBackgroundColor(Color.rgb(25, 25, 25));
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        setContentView(web);
+        android.widget.FrameLayout webRoot = new android.widget.FrameLayout(this);
+        webRoot.setBackgroundColor(Color.rgb(25, 25, 25));
+        webRoot.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        setContentView(webRoot);
         // Android 15 enforces edge-to-edge for target 35; keep controls clear of system bars.
         if (Build.VERSION.SDK_INT >= 30) {
-            web.setOnApplyWindowInsetsListener((v, insets) -> {
-                android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars());
-                v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            getWindow().setDecorFitsSystemWindows(false);
+            webRoot.setOnApplyWindowInsetsListener((v, insets) -> {
+                android.graphics.Insets bars = insets.getInsets(android.view.WindowInsets.Type.systemBars()
+                    | android.view.WindowInsets.Type.displayCutout() | android.view.WindowInsets.Type.ime());
+                android.widget.FrameLayout.LayoutParams layout = (android.widget.FrameLayout.LayoutParams) web.getLayoutParams();
+                if (layout.leftMargin != bars.left || layout.topMargin != bars.top || layout.rightMargin != bars.right || layout.bottomMargin != bars.bottom) {
+                    layout.setMargins(bars.left, bars.top, bars.right, bars.bottom);
+                    web.setLayoutParams(layout);
+                }
                 return insets;
             });
-        }
+            webRoot.requestApplyInsets();
+        } else webRoot.setFitsSystemWindows(true);
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -126,13 +139,12 @@ public final class MainActivity extends Activity {
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (!trustedPage) return false;
-                if (fileCallback != null) fileCallback.onReceiveValue(null);
+                if (photoPicker != null) { photoPicker.dismissQuietly(); photoPicker = null; }
+                completeFileSelection(null);
                 fileCallback = callback;
-                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*")
-                    .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                try { startActivityForResult(intent, PICK_IMAGES); }
-                catch (Exception e) { fileCallback.onReceiveValue(null); fileCallback = null; toast("无法打开图片选择器"); }
+                pickerLimit = Math.max(0, Math.min(10, referenceLimit));
+                if (pickerLimit == 0) { completeFileSelection(null); toast("已选满参考图，请先移除一张"); return true; }
+                showPhotoPicker();
                 return true;
             }
             @Override public void onPermissionRequest(PermissionRequest request) { request.deny(); }
@@ -169,6 +181,41 @@ public final class MainActivity extends Activity {
         return "image/png";
     }
     private void toast(String text) { runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show()); }
+    private void completeFileSelection(Uri[] images) {
+        ValueCallback<Uri[]> callback = fileCallback;
+        fileCallback = null;
+        if (callback != null) callback.onReceiveValue(images);
+    }
+    private void showPhotoPicker() {
+        photoPicker = new PhotoPickerDialog(this, pickerLimit, new PhotoPickerDialog.Listener() {
+            @Override public void onSelected(Uri[] images) { completeFileSelection(images); photoPicker = null; }
+            @Override public void onFiles() { photoPicker = null; openImageFiles(); }
+            @Override public void onRequestAccess() { requestPhotoAccess(); }
+        });
+        photoPicker.show();
+        if (!PhotoPickerDialog.hasFullAccess(this) && !PhotoPickerDialog.hasPartialAccess(this)
+            && !getPreferences(MODE_PRIVATE).getBoolean("photo-access-requested", false)) requestPhotoAccess();
+    }
+    private void requestPhotoAccess() {
+        if (destroyed || fileCallback == null) return;
+        getPreferences(MODE_PRIVATE).edit().putBoolean("photo-access-requested", true).apply();
+        String[] permissions = Build.VERSION.SDK_INT >= 34
+            ? new String[]{android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED}
+            : Build.VERSION.SDK_INT >= 33 ? new String[]{android.Manifest.permission.READ_MEDIA_IMAGES}
+            : new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE};
+        requestPermissions(permissions, PHOTO_ACCESS);
+    }
+    private void openImageFiles() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*")
+            .addCategory(Intent.CATEGORY_OPENABLE).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, pickerLimit > 1)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(intent, PICK_IMAGES); }
+        catch (Exception e) { completeFileSelection(null); toast("无法打开图片选择器"); }
+    }
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
+        super.onRequestPermissionsResult(request, permissions, grants);
+        if (request == PHOTO_ACCESS && photoPicker != null) photoPicker.refreshAccess();
+    }
     private void respond(String id, int status, String body) {
         runOnUiThread(() -> {
             if (destroyed || !trustedPage || !isLocal(Uri.parse(web.getUrl() == null ? "" : web.getUrl()))) return;
@@ -177,6 +224,10 @@ public final class MainActivity extends Activity {
         });
     }
     private final class Bridge {
+        @JavascriptInterface public void setReferenceLimit(int remaining) {
+            if (!trustedPage || destroyed) return;
+            referenceLimit = Math.max(0, Math.min(10, remaining));
+        }
         @JavascriptInterface public void postMessage(String text) {
             if (!trustedPage || destroyed || text == null || text.length() > 120 * 1024 * 1024) return;
             String id = "";
@@ -245,11 +296,11 @@ public final class MainActivity extends Activity {
             Uri[] selected = null;
             if (result == RESULT_OK && data != null) {
                 if (data.getClipData() != null) {
-                    int count = Math.min(10, data.getClipData().getItemCount()); selected = new Uri[count];
+                    int count = Math.min(pickerLimit, data.getClipData().getItemCount()); selected = new Uri[count];
                     for (int i = 0; i < count; i++) selected[i] = data.getClipData().getItemAt(i).getUri();
                 } else if (data.getData() != null) selected = new Uri[]{data.getData()};
             }
-            fileCallback.onReceiveValue(selected); fileCallback = null;
+            completeFileSelection(selected);
         }
         if (code == SAVE_IMAGE) {
             NativeApi.Download item = pendingExport; pendingExport = null;
@@ -271,6 +322,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onDestroy() {
         destroyed = true; trustedPage = false;
+        if (photoPicker != null) { photoPicker.dismissQuietly(); photoPicker = null; }
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         web.removeJavascriptInterface("NativeBridge"); web.destroy();
         workers.shutdown(); // Do not cancel a submitted billable request; its result is still saved locally.
