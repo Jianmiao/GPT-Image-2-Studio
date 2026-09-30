@@ -412,11 +412,16 @@ public final class PickerInstrumentation extends Instrumentation {
         AtomicReference<String> clickError = new AtomicReference<>();
         runOnMainSync(() -> {
             try {
-                GridView grid = getPickerGrid(activity);
-                int position = selectedPosition.get();
-                Object photo = selectedPhoto.get();
-                if (position < 0 || photo == null) return;
                 Dialog picker = getPickerDialog(activity);
+                java.lang.reflect.Field photosField = picker.getClass().getDeclaredField("photos");
+                photosField.setAccessible(true);
+                Object photo = null;
+                for (Object candidate : (java.util.List<?>)photosField.get(picker)) {
+                    java.lang.reflect.Field fileName = candidate.getClass().getDeclaredField("name");
+                    fileName.setAccessible(true);
+                    if (name.equals(String.valueOf(fileName.get(candidate)))) { photo = candidate; break; }
+                }
+                if (photo == null) return;
                 java.lang.reflect.Method toggle = picker.getClass().getDeclaredMethod("toggleSelection", photo.getClass());
                 toggle.setAccessible(true);
                 toggle.invoke(picker, photo);

@@ -343,7 +343,7 @@ select[size] option { padding: 8px; }
 
 /* Top-layer menu fallback for IME-reduced visual viewports. */
 @media (max-width: 760px) {
-  .tool-menu[open] .tool-panel {
+  .tool-menu .tool-panel {
     top: max(12px, env(safe-area-inset-top)) !important;
     bottom: auto !important;
     max-height: calc(100dvh - 24px) !important;
@@ -351,7 +351,7 @@ select[size] option { padding: 8px; }
 }
 
 @media (max-width: 1030px) {
-  .tool-menu[open] .tool-panel {
+  .tool-menu .tool-panel {
     top: var(--tool-panel-top, 12px) !important;
     bottom: auto !important;
     max-height: min(var(--tool-panel-max-height, 460px), calc(100dvh - 24px)) !important;
