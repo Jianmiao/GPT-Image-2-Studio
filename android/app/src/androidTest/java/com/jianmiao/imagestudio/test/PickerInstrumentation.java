@@ -151,11 +151,12 @@ public final class PickerInstrumentation extends Instrumentation {
             waitJs("document.getElementById('refs').hidden && document.getElementById('generationModeLabel').textContent.includes('文生图')", "Clearing photos restores text generation");
 
             tapWebElement("btnPickFiles");
-            awaitNode(null, FIRST_IMAGE);
-            clickNode(null, FIRST_IMAGE);
+            awaitNode("picker_grid", null);
+            tapFirstGridCell();
             clickNode("picker_albums", null);
             clickNode(null, "Screenshots");
-            clickNode(null, SECOND_IMAGE);
+            awaitNode("picker_grid", null);
+            tapFirstGridCell();
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 2", "Selections across albums are both returned");
             js("document.getElementById('btnClearRefs').click(); true");
