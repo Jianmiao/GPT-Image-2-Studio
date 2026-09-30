@@ -305,10 +305,10 @@ function positionToolPanels() {
     document.documentElement.style.setProperty('--tool-panel-max-height', room + 'px');
     if (window.innerWidth <= 1030) {
       document.querySelectorAll('.tool-menu[open] .tool-panel').forEach((panel) => {
-        panel.style.position = 'fixed';
-        panel.style.top = panelTop + 'px';
-        panel.style.bottom = 'auto';
-        panel.style.maxHeight = room + 'px';
+        panel.style.setProperty('position', 'fixed', 'important');
+        panel.style.setProperty('top', panelTop + 'px', 'important');
+        panel.style.setProperty('bottom', 'auto', 'important');
+        panel.style.setProperty('max-height', room + 'px', 'important');
       });
     }
   });

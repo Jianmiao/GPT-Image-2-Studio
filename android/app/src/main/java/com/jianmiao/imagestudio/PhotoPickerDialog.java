@@ -201,6 +201,10 @@ final class PhotoPickerDialog extends Dialog {
         grid.setClipToPadding(false);
         grid.setPadding(dp(3), 0, dp(3), dp(3));
         grid.setAdapter(photoAdapter);
+        // Let GridView dispatch the tap to the selected adapter position. A
+        // competing child click listener can swallow touches on some Android
+        // 15 Dialog windows and leave the selection count unchanged.
+        grid.setOnItemClickListener((parent, view, position, id) -> toggleSelection(photos.get(position)));
         grid.setOnScrollListener(new AbsListView.OnScrollListener() {
             public void onScrollStateChanged(AbsListView view, int state) {}
             public void onScroll(AbsListView view, int first, int visible, int total) {
@@ -467,10 +471,9 @@ final class PhotoPickerDialog extends Dialog {
             Photo photo = photos.get(position);
             cell.setContentDescription(photo.name);
             cell.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
-            cell.setFocusable(true);
-            cell.setClickable(true);
+            cell.setFocusable(false);
+            cell.setClickable(false);
             cell.setEnabled(true);
-            cell.setOnClickListener(v -> toggleSelection(photo));
             bindThumbnail((ImageView) cell.getChildAt(0), photo.uri);
             int index = new ArrayList<>(selected.keySet()).indexOf(photo.uri.toString());
             TextView badge = (TextView) cell.getChildAt(1);
