@@ -122,7 +122,7 @@ public final class PickerInstrumentation extends Instrumentation {
 
             tapWebElement("btnPickFiles");
             awaitNode("picker_grid", null);
-            check(gridHasPhoto(activity, FIRST_IMAGE), "All photos exposes the synthetic first image");
+            awaitGridPhotos(activity, FIRST_IMAGE, SECOND_IMAGE);
             screenshot("02-album-sheet");
             clickNode("picker_expand", null);
             screenshot("03-album-expanded");
@@ -137,7 +137,7 @@ public final class PickerInstrumentation extends Instrumentation {
             awaitNode(null, "Screenshots");
             screenshot("04-album-categories");
             clickNode(null, "TestAlbum");
-            awaitGridCount(activity, 1, "TestAlbum filter exposes exactly one image");
+            awaitGridPhotos(activity, FIRST_IMAGE);
             check(gridHasPhoto(activity, FIRST_IMAGE), "TestAlbum exposes the synthetic first image");
             check(!gridHasPhoto(activity, SECOND_IMAGE), "TestAlbum excludes the other album image");
             tapPhoto(activity, FIRST_IMAGE);
@@ -148,33 +148,38 @@ public final class PickerInstrumentation extends Instrumentation {
             waitJs("document.querySelectorAll('#refsList img').length === 1", "Native selected image reaches the shared composer");
             waitJs("document.getElementById('generationModeLabel').textContent.includes('图生图')", "Uploading a photo automatically selects image editing");
             check("1".equals(js("document.getElementById('refCount').textContent")), "Exactly one reference was added");
+            check(("[\"" + FIRST_IMAGE + "\"]").equals(js("JSON.stringify([...document.querySelectorAll('#refsList img')].map(e => e.alt))")), "The selected TestAlbum photo reaches the composer");
             screenshot("06-reference-ready");
             js("document.getElementById('btnClearRefs').click(); true");
             waitJs("document.getElementById('refs').hidden && document.getElementById('generationModeLabel').textContent.includes('文生图')", "Clearing photos restores text generation");
 
             tapWebElement("btnPickFiles");
-            check(gridHasPhoto(activity, FIRST_IMAGE), "All photos exposes the first image");
+            awaitGridPhotos(activity, FIRST_IMAGE, SECOND_IMAGE);
             tapPhoto(activity, FIRST_IMAGE);
             clickNode("picker_albums", null);
             clickNode(null, "Screenshots");
-            awaitGridCount(activity, 1, "Screenshots filter exposes exactly one image");
+            awaitGridPhotos(activity, SECOND_IMAGE);
             check(gridHasPhoto(activity, SECOND_IMAGE), "Screenshots exposes the synthetic second image");
             check(!gridHasPhoto(activity, FIRST_IMAGE), "Screenshots excludes the other album image");
             tapPhoto(activity, SECOND_IMAGE);
+            awaitNode(null, "添加（2）");
             check(confirmEnabled(activity), "Cross-album selection keeps confirmation enabled");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 2", "Selections across albums are both returned");
+            check(("[\"" + FIRST_IMAGE + "\",\"" + SECOND_IMAGE + "\"]").equals(js("JSON.stringify([...document.querySelectorAll('#refsList img')].map(e => e.alt))")), "Cross-album selection preserves both image identities and order");
             js("document.getElementById('btnClearRefs').click(); true");
             waitJs("document.getElementById('refs').hidden", "Clear the multi-selection");
 
             js("window.NativeBridge.setReferenceLimit(1); true");
             tapWebElement("btnPickFiles");
+            awaitGridPhotos(activity, FIRST_IMAGE, SECOND_IMAGE);
             tapPhoto(activity, FIRST_IMAGE);
             check(gridHasPhoto(activity, SECOND_IMAGE), "Limit test exposes the second image for attempted selection");
             tapPhoto(activity, SECOND_IMAGE);
             awaitNode(null, "添加（1）");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 1", "The picker enforces the remaining one-image limit");
+            check(("[\"" + FIRST_IMAGE + "\"]").equals(js("JSON.stringify([...document.querySelectorAll('#refsList img')].map(e => e.alt))")), "The limit rejects the second image without replacing the first selection");
             js("document.getElementById('btnClearRefs').click(); true");
             waitJs("document.getElementById('refs').hidden", "Clear the limit test selection");
 
@@ -298,43 +303,43 @@ public final class PickerInstrumentation extends Instrumentation {
         return (GridView)value;
     }
 
-    private int gridCount(Activity activity) throws Exception {
-        AtomicReference<Integer> count = new AtomicReference<>(0);
+    private List<String> gridPhotoNames(Activity activity) throws Exception {
+        List<String> names = new ArrayList<>();
+        AtomicReference<Exception> problem = new AtomicReference<>();
         runOnMainSync(() -> {
-            try { count.set(getPickerGrid(activity).getAdapter().getCount()); } catch (Exception ignored) {}
+            try {
+                android.widget.ListAdapter adapter = getPickerGrid(activity).getAdapter();
+                for (int i = 0; i < adapter.getCount(); i++) {
+                    Object photo = adapter.getItem(i);
+                    java.lang.reflect.Field name = photo.getClass().getDeclaredField("name");
+                    name.setAccessible(true);
+                    names.add(String.valueOf(name.get(photo)));
+                }
+            } catch (Exception error) { problem.set(error); }
         });
-        return count.get();
+        if (problem.get() != null) throw problem.get();
+        return names;
     }
 
-    private void awaitGridCount(Activity activity, int expected, String message) throws Exception {
+    private void awaitGridPhotos(Activity activity, String... expectedNames) throws Exception {
+        List<String> expected = new ArrayList<>(java.util.Arrays.asList(expectedNames));
+        java.util.Collections.sort(expected);
+        List<String> actual = new ArrayList<>();
         long deadline = SystemClock.uptimeMillis() + 20000;
         do {
-            if (gridCount(activity) == expected && gridHasPhoto(activity, expected == 1 ? (message.startsWith("Screenshots") ? SECOND_IMAGE : FIRST_IMAGE) : "")) {
-                check(true, message);
+            actual = gridPhotoNames(activity);
+            java.util.Collections.sort(actual);
+            if (actual.equals(expected)) {
+                check(true, "Photo grid contains exactly " + expected);
                 return;
             }
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
-        throw new AssertionError(message + ": expected " + expected + " but got " + gridCount(activity));
+        throw new AssertionError("Photo grid filter mismatch: expected " + expected + " but got " + actual);
     }
 
     private boolean gridHasPhoto(Activity activity, String name) throws Exception {
-        long deadline = SystemClock.uptimeMillis() + 20000;
-        do {
-            AtomicReference<Boolean> found = new AtomicReference<>(false);
-            runOnMainSync(() -> {
-                try {
-                    GridView grid = getPickerGrid(activity);
-                    for (int i = 0; i < grid.getChildCount(); i++) {
-                        View child = grid.getChildAt(i);
-                        if (name.equals(String.valueOf(child.getContentDescription()))) { found.set(true); break; }
-                    }
-                } catch (Exception ignored) {}
-            });
-            if (found.get()) return true;
-            SystemClock.sleep(150);
-        } while (SystemClock.uptimeMillis() < deadline);
-        return false;
+        return gridPhotoNames(activity).contains(name);
     }
 
     private boolean confirmEnabled(Activity activity) throws Exception {
@@ -363,10 +368,13 @@ public final class PickerInstrumentation extends Instrumentation {
                     for (int i = 0; i < grid.getChildCount(); i++) {
                         View child = grid.getChildAt(i);
                         if (!name.equals(String.valueOf(child.getContentDescription()))) continue;
+                        android.graphics.Rect visible = new android.graphics.Rect();
+                        if (!child.isShown() || !child.getGlobalVisibleRect(visible) || visible.isEmpty()) continue;
                         int[] location = new int[2];
                         child.getLocationOnScreen(location);
                         coordinates[0] = location[0] + child.getWidth() / 2f;
                         coordinates[1] = location[1] + child.getHeight() / 2f;
+                        if (!visible.contains((int)coordinates[0], (int)coordinates[1])) continue;
                         found.set(true);
                         break;
                     }

@@ -283,13 +283,24 @@ function positionToolPanels() {
   requestAnimationFrame(() => {
     const rect = el.composer.getBoundingClientRect();
     const viewport = window.visualViewport;
-    const viewportTop = viewport ? viewport.offsetTop : 0;
-    const visibleHeight = viewport ? viewport.height : window.innerHeight;
+    // Headless Chromium can expose visualViewport.height as 0 during a metrics
+    // update. Treat that transient value as unavailable or it becomes a huge
+    // `bottom` offset and sends fixed menus above the visible viewport.
+    const viewportHeight = viewport && Number.isFinite(viewport.height) && viewport.height > 100
+      ? viewport.height : window.innerHeight;
+    const visibleHeight = Math.max(1, viewportHeight || window.innerHeight || document.documentElement.clientHeight);
+    const rawViewportTop = viewport && Number.isFinite(viewport.offsetTop) ? viewport.offsetTop : 0;
+    // During mobile emulation Chromium may report a negative visual viewport
+    // offset while applying new device metrics. CSS top coordinates cannot be
+    // negative here: clamp it to the visible layout range before positioning.
+    const layoutHeight = Math.max(visibleHeight, window.innerHeight || visibleHeight);
+    const viewportTop = Math.max(0, Math.min(rawViewportTop, Math.max(0, layoutHeight - visibleHeight)));
     const roomAbove = rect.top - viewportTop - 24;
-    const room = roomAbove >= 180 ? roomAbove : Math.max(80, visibleHeight - 24);
-    const bottom = roomAbove >= 180 ? Math.max(12, window.innerHeight - rect.top + 10)
-      : Math.max(12, window.innerHeight - viewportTop - visibleHeight + 12);
-    document.documentElement.style.setProperty('--tool-panel-bottom', bottom + 'px');
+    const room = roomAbove >= 180 ? Math.min(460, roomAbove) : Math.max(80, visibleHeight - 24);
+    const panelTop = roomAbove >= 180
+      ? Math.max(viewportTop + 12, rect.top - room - 12)
+      : viewportTop + 12;
+    document.documentElement.style.setProperty('--tool-panel-top', panelTop + 'px');
     document.documentElement.style.setProperty('--tool-panel-max-height', room + 'px');
   });
 }

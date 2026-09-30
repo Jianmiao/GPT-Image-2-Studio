@@ -23,10 +23,10 @@
   .model-menu .tool-panel,.size-menu .tool-panel,.style-menu .tool-panel,
   .template-menu .tool-panel,.more-menu .tool-panel{
     position:fixed !important;
-    top:auto !important;
+    top:var(--tool-panel-top, 12px) !important;
+    bottom:auto !important;
     left:12px;
     right:12px;
-    bottom:var(--tool-panel-bottom, 180px);
     width:auto;
     max-width:540px;
     max-height:var(--tool-panel-max-height, calc(100dvh - 220px));
@@ -218,7 +218,8 @@ select[size] option { padding: 8px; }
     position: fixed;
     left: max(12px, env(safe-area-inset-left));
     right: max(12px, env(safe-area-inset-right));
-    bottom: var(--tool-panel-bottom, 230px);
+    top: var(--tool-panel-top, 12px);
+    bottom: auto;
     width: auto;
     max-width: 540px;
     max-height: var(--tool-panel-max-height, calc(100dvh - 300px));
