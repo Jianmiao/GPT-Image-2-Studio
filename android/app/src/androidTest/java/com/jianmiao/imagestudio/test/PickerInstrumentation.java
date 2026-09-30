@@ -415,7 +415,7 @@ public final class PickerInstrumentation extends Instrumentation {
                 if (position < 0 || cell == null) return;
                 Object photo = grid.getAdapter().getItem(position);
                 java.lang.reflect.Method toggle = null;
-                for (java.lang.reflect.Method candidate : grid.getAdapter().getClass().getEnclosingClass().getDeclaredMethods()) {
+                for (java.lang.reflect.Method candidate : getPickerDialog(activity).getClass().getDeclaredMethods()) {
                     if (candidate.getName().equals("toggleSelection") && candidate.getParameterTypes().length == 1) { toggle = candidate; break; }
                 }
                 if (toggle == null) return;
