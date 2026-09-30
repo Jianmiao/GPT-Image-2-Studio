@@ -179,6 +179,9 @@ function closeServer(server) {
     const fill = (id, value) => evaluate(`(() => { const e = document.getElementById(${JSON.stringify(id)}); e.value = ${JSON.stringify(value)}; e.dispatchEvent(new Event('input', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     const shot = async (name) => {
       await pause(180);
+      // Hosted Windows runners may not expose a screenshot compositor. All
+      // interaction and geometry assertions still run when capture is disabled.
+      if (process.env.UI_SCREENSHOTS === '0') return;
       const result = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
       const file = path.join(screenshotDir, name + '.png');
       fs.writeFileSync(file, Buffer.from(result.data, 'base64'));
@@ -359,7 +362,7 @@ function closeServer(server) {
     console.log('PASS mobile layout and isolated data/network');
     console.log('All chat UI checks passed. Screenshots: ' + screenshotDir);
   } catch (error) {
-    if (pageSend) {
+    if (pageSend && process.env.UI_SCREENSHOTS !== '0') {
       try {
         const shot = await pageSend('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
         fs.writeFileSync(path.join(screenshotDir, 'failure.png'), Buffer.from(shot.data, 'base64'));

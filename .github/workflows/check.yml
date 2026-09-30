@@ -21,6 +21,8 @@ jobs:
         run: npm test
       - name: Check desktop and mobile interface
         run: node test/chat-ui-e2e.js
+        env:
+          UI_SCREENSHOTS: '0'
 
   android:
     runs-on: ubuntu-latest
@@ -31,6 +33,9 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
       - name: Verify native single-submit transport with a local mock relay
         run: |
           mkdir -p "$RUNNER_TEMP/native-tests"
