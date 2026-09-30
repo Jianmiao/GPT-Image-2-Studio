@@ -1,0 +1,24 @@
+{
+  "name": "gpt-image-2-relay-studio",
+  "version": "1.1.0",
+  "private": true,
+  "description": "通过第三方中转站（OpenAI 兼容网关）使用 GPT Image 2 生图 / 改图的本地工具，自动获取可用模型",
+  "main": "server/cli.js",
+  "scripts": {
+    "start": "node server/cli.js",
+    "dev": "node server/cli.js --no-open",
+    "test": "node test/run-all.js",
+    "smoke": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "gpt-image-2",
+    "openai",
+    "image-generation",
+    "relay",
+    "中转站"
+  ],
+  "license": "MIT"
+}

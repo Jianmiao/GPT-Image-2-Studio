@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.jianmiao.imagestudio'
+    compileSdk 35
+    buildToolsVersion '35.0.0'
+
+    defaultConfig {
+        applicationId 'com.jianmiao.imagestudio'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main.assets.srcDir layout.buildDirectory.dir('generated/web-assets')
+    }
+}
+
+// Package only the shared interface, never desktop settings, keys, or history.
+def syncWebAssets = tasks.register('syncWebAssets', Sync) {
+    from(file("${rootDir}/../web")) {
+        include '**/*.html', '**/*.css', '**/*.js'
+        exclude '**/test/**', '**/.artifacts/**', '**/node_modules/**'
+    }
+    into layout.buildDirectory.dir('generated/web-assets/web')
+}
+
+tasks.named('preBuild').configure {
+    dependsOn syncWebAssets
+}
