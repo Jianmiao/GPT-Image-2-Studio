@@ -22,7 +22,8 @@
 @media(max-width:1030px) and (min-width:761px){
   .model-menu .tool-panel,.size-menu .tool-panel,.style-menu .tool-panel,
   .template-menu .tool-panel,.more-menu .tool-panel{
-    position:fixed;
+    position:fixed !important;
+    top:auto !important;
     left:12px;
     right:12px;
     bottom:var(--tool-panel-bottom, 180px);

@@ -24,6 +24,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityEvent;
 import android.widget.AbsListView;
 import android.widget.BaseAdapter;
 import android.widget.FrameLayout;
@@ -200,7 +201,6 @@ final class PhotoPickerDialog extends Dialog {
         grid.setClipToPadding(false);
         grid.setPadding(dp(3), 0, dp(3), dp(3));
         grid.setAdapter(photoAdapter);
-        grid.setOnItemClickListener((parent, view, position, id) -> toggleSelection(photos.get(position)));
         grid.setOnScrollListener(new AbsListView.OnScrollListener() {
             public void onScrollStateChanged(AbsListView view, int state) {}
             public void onScroll(AbsListView view, int first, int visible, int total) {
@@ -284,7 +284,7 @@ final class PhotoPickerDialog extends Dialog {
         hint.setText(partial ? "当前仅显示已授权照片 · 点击选择更多" : "允许访问照片，直接浏览相册 · 点击授权");
         if (!full && !partial) {
             queryVersion++;
-            photos.clear(); albums.clear(); photoAdapter.notifyDataSetChanged(); albumAdapter.notifyDataSetChanged();
+            photos.clear(); albums.clear(); photoAdapter.notifyDataSetChanged(); albumAdapter.notifyDataSetChanged(); refreshGridAccessibility();
             empty.setText("未获得照片访问权限\n你仍可点击「文件 / 系统相册」选择图片");
             empty.setVisibility(View.VISIBLE);
             return;
@@ -299,6 +299,7 @@ final class PhotoPickerDialog extends Dialog {
         hasMore = true;
         photos.clear();
         photoAdapter.notifyDataSetChanged();
+        refreshGridAccessibility();
         grid.setSelection(0);
         empty.setText("正在读取相册…");
         empty.setVisibility(View.VISIBLE);
@@ -341,6 +342,7 @@ final class PhotoPickerDialog extends Dialog {
                 hasMore = page.size() == PAGE_SIZE && error == null;
                 photos.addAll(page);
                 photoAdapter.notifyDataSetChanged();
+                refreshGridAccessibility();
                 if (error != null) { empty.setText(error); empty.setVisibility(View.VISIBLE); }
                 else updateEmpty();
             });
@@ -385,6 +387,19 @@ final class PhotoPickerDialog extends Dialog {
         else { Toast.makeText(activity, "最多还能添加 " + limit + " 张参考图", Toast.LENGTH_SHORT).show(); return; }
         updateSelection();
         photoAdapter.notifyDataSetChanged();
+        refreshGridAccessibility();
+    }
+
+    /** Notify TalkBack/UiAutomation after asynchronous GridView data changes. */
+    private void refreshGridAccessibility() {
+        if (grid == null) return;
+        grid.post(() -> {
+            if (!disposed) {
+                grid.requestLayout();
+                grid.invalidate();
+                grid.sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+            }
+        });
     }
 
     private void updateSelection() {
@@ -452,6 +467,10 @@ final class PhotoPickerDialog extends Dialog {
             Photo photo = photos.get(position);
             cell.setContentDescription(photo.name);
             cell.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+            cell.setFocusable(true);
+            cell.setClickable(true);
+            cell.setEnabled(true);
+            cell.setOnClickListener(v -> toggleSelection(photo));
             bindThumbnail((ImageView) cell.getChildAt(0), photo.uri);
             int index = new ArrayList<>(selected.keySet()).indexOf(photo.uri.toString());
             TextView badge = (TextView) cell.getChildAt(1);

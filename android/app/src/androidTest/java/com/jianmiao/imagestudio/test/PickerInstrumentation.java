@@ -3,6 +3,7 @@ package com.jianmiao.imagestudio.test;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.app.Dialog;
 import android.app.UiAutomation;
 import android.content.ContentValues;
 import android.content.Context;
@@ -21,6 +22,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.webkit.WebView;
+import android.widget.GridView;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 import java.io.File;
@@ -120,7 +122,7 @@ public final class PickerInstrumentation extends Instrumentation {
 
             tapWebElement("btnPickFiles");
             awaitNode("picker_grid", null);
-            awaitNode(null, FIRST_IMAGE);
+            check(gridHasPhoto(activity, FIRST_IMAGE), "All photos exposes the synthetic first image");
             screenshot("02-album-sheet");
             clickNode("picker_expand", null);
             screenshot("03-album-expanded");
@@ -135,12 +137,12 @@ public final class PickerInstrumentation extends Instrumentation {
             awaitNode(null, "Screenshots");
             screenshot("04-album-categories");
             clickNode(null, "TestAlbum");
-            // GridView item accessibility can lag behind a provider-filter refresh;
-            // tap its first visible cell just as a real user does.
-            awaitNode("picker_grid", null);
-            tapFirstGridCell();
+            awaitGridCount(activity, 1, "TestAlbum filter exposes exactly one image");
+            check(gridHasPhoto(activity, FIRST_IMAGE), "TestAlbum exposes the synthetic first image");
+            check(!gridHasPhoto(activity, SECOND_IMAGE), "TestAlbum excludes the other album image");
+            tapPhoto(activity, FIRST_IMAGE);
             awaitNode(null, "添加（1）");
-            check(true, "Filtered album selection adds one image");
+            check(confirmEnabled(activity), "Filtered album selection enables confirmation");
             screenshot("05-image-selected");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 1", "Native selected image reaches the shared composer");
@@ -151,13 +153,15 @@ public final class PickerInstrumentation extends Instrumentation {
             waitJs("document.getElementById('refs').hidden && document.getElementById('generationModeLabel').textContent.includes('文生图')", "Clearing photos restores text generation");
 
             tapWebElement("btnPickFiles");
-            awaitNode("picker_grid", null);
-            tapFirstGridCell();
+            check(gridHasPhoto(activity, FIRST_IMAGE), "All photos exposes the first image");
+            tapPhoto(activity, FIRST_IMAGE);
             clickNode("picker_albums", null);
             clickNode(null, "Screenshots");
-            awaitNode("picker_grid", null);
-            SystemClock.sleep(700);
-            tapFirstGridCell();
+            awaitGridCount(activity, 1, "Screenshots filter exposes exactly one image");
+            check(gridHasPhoto(activity, SECOND_IMAGE), "Screenshots exposes the synthetic second image");
+            check(!gridHasPhoto(activity, FIRST_IMAGE), "Screenshots excludes the other album image");
+            tapPhoto(activity, SECOND_IMAGE);
+            check(confirmEnabled(activity), "Cross-album selection keeps confirmation enabled");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 2", "Selections across albums are both returned");
             js("document.getElementById('btnClearRefs').click(); true");
@@ -165,9 +169,10 @@ public final class PickerInstrumentation extends Instrumentation {
 
             js("window.NativeBridge.setReferenceLimit(1); true");
             tapWebElement("btnPickFiles");
-            awaitNode(null, FIRST_IMAGE);
-            clickNode(null, FIRST_IMAGE);
-            clickNode(null, SECOND_IMAGE);
+            tapPhoto(activity, FIRST_IMAGE);
+            check(gridHasPhoto(activity, SECOND_IMAGE), "Limit test exposes the second image for attempted selection");
+            tapPhoto(activity, SECOND_IMAGE);
+            awaitNode(null, "添加（1）");
             clickNode("picker_confirm", null);
             waitJs("document.querySelectorAll('#refsList img').length === 1", "The picker enforces the remaining one-image limit");
             js("document.getElementById('btnClearRefs').click(); true");
@@ -281,18 +286,99 @@ public final class PickerInstrumentation extends Instrumentation {
         } finally { down.recycle(); up.recycle(); }
     }
 
-    private void tapFirstGridCell() throws Exception {
-        AccessibilityNodeInfo node = awaitNode("picker_grid", null);
-        android.graphics.Rect bounds = new android.graphics.Rect();
-        node.getBoundsInScreen(bounds);
-        node.recycle();
-        // The picker uses four columns on the emulator; the first cell is near
-        // the top-left of the grid after the album filter has settled.
-        float x = bounds.left + Math.max(10, bounds.width() / 8f);
-        float y = bounds.top + Math.max(10, bounds.width() / 8f);
+    private GridView getPickerGrid(Activity activity) throws Exception {
+        java.lang.reflect.Field pickerField = activity.getClass().getDeclaredField("photoPicker");
+        pickerField.setAccessible(true);
+        Object picker = pickerField.get(activity);
+        if (!(picker instanceof Dialog)) throw new AssertionError("Photo picker dialog is not open");
+        java.lang.reflect.Field gridField = picker.getClass().getDeclaredField("grid");
+        gridField.setAccessible(true);
+        Object value = gridField.get(picker);
+        if (!(value instanceof GridView)) throw new AssertionError("Photo picker grid is unavailable");
+        return (GridView)value;
+    }
+
+    private int gridCount(Activity activity) throws Exception {
+        AtomicReference<Integer> count = new AtomicReference<>(0);
+        runOnMainSync(() -> {
+            try { count.set(getPickerGrid(activity).getAdapter().getCount()); } catch (Exception ignored) {}
+        });
+        return count.get();
+    }
+
+    private void awaitGridCount(Activity activity, int expected, String message) throws Exception {
+        long deadline = SystemClock.uptimeMillis() + 20000;
+        do {
+            if (gridCount(activity) == expected && gridHasPhoto(activity, expected == 1 ? (message.startsWith("Screenshots") ? SECOND_IMAGE : FIRST_IMAGE) : "")) {
+                check(true, message);
+                return;
+            }
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis() < deadline);
+        throw new AssertionError(message + ": expected " + expected + " but got " + gridCount(activity));
+    }
+
+    private boolean gridHasPhoto(Activity activity, String name) throws Exception {
+        long deadline = SystemClock.uptimeMillis() + 20000;
+        do {
+            AtomicReference<Boolean> found = new AtomicReference<>(false);
+            runOnMainSync(() -> {
+                try {
+                    GridView grid = getPickerGrid(activity);
+                    for (int i = 0; i < grid.getChildCount(); i++) {
+                        View child = grid.getChildAt(i);
+                        if (name.equals(String.valueOf(child.getContentDescription()))) { found.set(true); break; }
+                    }
+                } catch (Exception ignored) {}
+            });
+            if (found.get()) return true;
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis() < deadline);
+        return false;
+    }
+
+    private boolean confirmEnabled(Activity activity) throws Exception {
+        AtomicReference<Boolean> enabled = new AtomicReference<>(false);
+        runOnMainSync(() -> {
+            try {
+                java.lang.reflect.Field pickerField = activity.getClass().getDeclaredField("photoPicker");
+                pickerField.setAccessible(true);
+                Dialog picker = (Dialog)pickerField.get(activity);
+                java.lang.reflect.Field field = picker.getClass().getDeclaredField("confirm");
+                field.setAccessible(true);
+                enabled.set(((View)field.get(picker)).isEnabled());
+            } catch (Exception ignored) {}
+        });
+        return enabled.get();
+    }
+
+    private void tapPhoto(Activity activity, String name) throws Exception {
+        long deadline = SystemClock.uptimeMillis() + 20000;
+        float[] coordinates = new float[2];
+        do {
+            AtomicReference<Boolean> found = new AtomicReference<>(false);
+            runOnMainSync(() -> {
+                try {
+                    GridView grid = getPickerGrid(activity);
+                    for (int i = 0; i < grid.getChildCount(); i++) {
+                        View child = grid.getChildAt(i);
+                        if (!name.equals(String.valueOf(child.getContentDescription()))) continue;
+                        int[] location = new int[2];
+                        child.getLocationOnScreen(location);
+                        coordinates[0] = location[0] + child.getWidth() / 2f;
+                        coordinates[1] = location[1] + child.getHeight() / 2f;
+                        found.set(true);
+                        break;
+                    }
+                } catch (Exception ignored) {}
+            });
+            if (found.get()) break;
+            SystemClock.sleep(150);
+        } while (SystemClock.uptimeMillis() < deadline);
+        check(coordinates[0] > 0 && coordinates[1] > 0, "Visible photo cell exists: " + name);
         long now = SystemClock.uptimeMillis();
-        android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, x, y, 0);
-        android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, x, y, 0);
+        android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, coordinates[0], coordinates[1], 0);
+        android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, coordinates[0], coordinates[1], 0);
         down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         try { automation.injectInputEvent(down, true); automation.injectInputEvent(up, true); }
