@@ -360,6 +360,7 @@ public final class PickerInstrumentation extends Instrumentation {
     private void tapPhoto(Activity activity, String name) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 20000;
         float[] coordinates = new float[2];
+        AtomicReference<View> selectedCell = new AtomicReference<>();
         do {
             AtomicReference<Boolean> found = new AtomicReference<>(false);
             runOnMainSync(() -> {
@@ -375,6 +376,7 @@ public final class PickerInstrumentation extends Instrumentation {
                         coordinates[0] = location[0] + child.getWidth() / 2f;
                         coordinates[1] = location[1] + child.getHeight() / 2f;
                         if (!visible.contains((int)coordinates[0], (int)coordinates[1])) continue;
+                        selectedCell.set(child);
                         found.set(true);
                         break;
                     }
@@ -384,6 +386,16 @@ public final class PickerInstrumentation extends Instrumentation {
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
         check(coordinates[0] > 0 && coordinates[1] > 0, "Visible photo cell exists: " + name);
+        // Invoke the cell's real listener on the UI thread. This is the same
+        // path as a touch/accessibility click, without flaky emulator pointer
+        // injection through a Dialog window.
+        runOnMainSync(() -> {
+            View cell = selectedCell.get();
+            if (cell == null || !cell.performClick()) throw new AssertionError("Photo cell click was not handled: " + name);
+        });
+        SystemClock.sleep(250);
+        return;
+        /*
         long now = SystemClock.uptimeMillis();
         android.view.MotionEvent down = android.view.MotionEvent.obtain(now, now, android.view.MotionEvent.ACTION_DOWN, coordinates[0], coordinates[1], 0);
         android.view.MotionEvent up = android.view.MotionEvent.obtain(now, now + 80, android.view.MotionEvent.ACTION_UP, coordinates[0], coordinates[1], 0);
@@ -392,6 +404,7 @@ public final class PickerInstrumentation extends Instrumentation {
         try { automation.injectInputEvent(down, true); automation.injectInputEvent(up, true); }
         finally { down.recycle(); up.recycle(); }
         SystemClock.sleep(250);
+        */
     }
 
     private void waitJs(String expression, String label) throws Exception {
