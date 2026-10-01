@@ -27,6 +27,8 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let relayMode = 'json';
 let modelIds = ['gpt-image-2', 'gpt-image-2-auto'];
 let modelDelay = 0;
+let generationHold = null;
+let releaseGeneration = null;
 const requests = [];
 const blocked = [];
 const png = makePng(640, 400, { seed: 2 });
@@ -53,6 +55,7 @@ const relayServer = http.createServer(async (req, res) => {
     return json(res, 200, { data });
   }
   if (!['/v1/images/generations', '/v1/images/edits'].includes(req.url)) return json(res, 404, { error: { message: 'Unknown local test endpoint' } });
+  if (generationHold) await generationHold;
   await pause(180);
   if (relayMode === 'error') return json(res, 400, { error: { message: '本地模拟审核拒绝', code: 'content_policy_violation' } });
   if (relayMode === 'sse') {
@@ -273,12 +276,46 @@ function closeServer(server) {
 
     await fill('prompt', '本地测试：柔和光线下的一只橘猫');
     let before = postCount();
+    generationHold = new Promise(resolve => { releaseGeneration = resolve; });
     await click('#btnGenerate');
+    await waitFor('document.getElementById("btnGenerate").disabled', 'Generation locks submission');
+    assert.equal(await evaluate('document.getElementById("btnSettings").disabled'), false, 'Settings stays available during generation');
+    await click('#btnSettings');
+    await waitFor('!document.getElementById("settingsModal").hidden', 'Settings opens during generation');
+    await send('Emulation.setDeviceMetricsOverride', { width: 360, height: 640, deviceScaleFactor: 1, mobile: true });
+    await pause(100);
+    assert.ok(await evaluate(`(() => { const card=document.querySelector('#settingsModal .modal-card').getBoundingClientRect(), save=document.getElementById('btnSaveSettings').getBoundingClientRect(), body=document.querySelector('#settingsModal .modal-content'); return card.top>=0&&card.bottom<=innerHeight+1&&save.bottom<=innerHeight+1&&body.clientHeight>100; })()`), 'Busy notice leaves mobile settings scrollable and footer visible');
+    const connectionControls = ['baseUrl', 'apiKey', 'proxy', 'allowPrivateHost', 'streamUpstream', 'method', 'editEndpoint', 'timeoutSeconds', 'moderation', 'btnFetchModels', 'btnTest', 'btnProbeProxy', 'btnSaveSettings'];
+    assert.ok(await evaluate(`${JSON.stringify(connectionControls)}.every(id => document.getElementById(id).disabled)`), 'Connection controls are locked for the running request');
+    assert.match(await evaluate('document.getElementById("settingsBusyNotice").textContent'), /生成结束/);
+    assert.equal(await evaluate('document.getElementById("themePreference").disabled'), false, 'Theme remains editable');
+    await fill('themePreference', 'light');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'light', 'Theme changes during generation');
+    await click('#btnFetchModels');
+    await click('#btnTest');
+    await click('#btnProbeProxy');
+    await click('#btnSaveSettings');
+    await click('#settingsClose');
+    assert.equal(await evaluate('document.getElementById("settingsModal").hidden'), true, 'Read-only settings can close while save is locked');
+    assert.equal(await evaluate('document.getElementById("baseUrl").value'), configuredUrl, 'Closing preserves the submitted provider');
+    assert.equal(await evaluate('document.getElementById("btnGenerate").disabled'), true, 'Closing settings does not unlock generation');
+    await click('#btnSettings');
+    releaseGeneration(); generationHold = null; releaseGeneration = null;
     await success('JSON generation');
+    assert.equal(await evaluate('document.getElementById("settingsModal").hidden'), false, 'Settings remains open when generation finishes');
+    assert.ok(await evaluate(`${JSON.stringify(connectionControls)}.every(id => !document.getElementById(id).disabled)`), 'Connection controls unlock after completion');
+    assert.equal(await evaluate('document.getElementById("settingsBusyNotice").hidden'), true, 'Read-only notice disappears after completion');
+    await fill('baseUrl', 'https://unsaved.invalid');
+    await fill('themePreference', 'dark');
+    await click('#settingsClose');
+    assert.equal(await evaluate('document.getElementById("baseUrl").value'), configuredUrl, 'Cancel after completion restores the pre-generation settings snapshot');
+    assert.equal(await evaluate('document.documentElement.dataset.theme'), 'dark', 'Closing settings does not discard appearance preferences');
+    await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     assert.equal(postCount() - before, 1, 'JSON generation sends once');
     assert.equal(requests.filter((r) => r.method === 'POST').at(-1).payload.size, '1280x720');
     await shot('desktop-result');
     console.log('PASS JSON generation and final result');
+    console.log('PASS settings view/theme during generation, connection locking, completion unlock and cancel snapshot');
 
     await click('#btnNewChat');
     assert.equal(await evaluate('document.querySelectorAll("#results .result-card").length'), 0, 'New chat clears displayed results');
@@ -371,6 +408,42 @@ function closeServer(server) {
     assert.equal(await evaluate('document.querySelectorAll("#results [data-role=live]").length'), 0);
     console.log('PASS visible error without retry');
 
+    // Native album metadata changes presentation only; generation still goes
+    // through the isolated local fake relay once, with no save/retry request.
+    relayMode = 'json';
+    await evaluate(`window.__beforeAlbumFetch=window.fetch; window.__albumTestItems={}; window.fetch=async(...args)=>{
+      const response=await window.__beforeAlbumFetch(...args);
+      if(!response.ok || !['/api/generate','/api/history'].includes(args[0])) return response;
+      const body=await response.json();
+      if(args[0]==='/api/generate' && body.item){ body.item.albumSave=window.__albumTestResult; window.__albumTestItems[body.item.id]=body.item.albumSave; }
+      if(args[0]==='/api/history' && body.items) body.items.forEach(item=>{if(window.__albumTestItems[item.id])item.albumSave=window.__albumTestItems[item.id]});
+      return new Response(JSON.stringify(body),{status:response.status,headers:response.headers});
+    }`);
+    for (const saved of [1, 0]) {
+      await click('#btnNewChat');
+      const metadata = { saved, total: 1, album: 'GPT Image 2', errors: saved ? [] : ['未授予相册写入权限'] };
+      await evaluate('window.__albumTestResult=' + JSON.stringify(metadata));
+      await fill('prompt', '本地测试：相册保存反馈 ' + saved);
+      before = postCount();
+      await click('#btnGenerate');
+      await success('Album save presentation ' + saved);
+      assert.equal(postCount() - before, 1, 'Album feedback never submits another generation');
+      const message = await evaluate('document.querySelector("#results .album-save-note").textContent');
+      assert.match(message, saved ? /已保存 1 张到手机相册 · GPT Image 2/ : /图片已生成，但 1 张未能存入相册.*未授予相册写入权限.*手动保存/);
+      assert.equal(await evaluate('document.querySelector("#results .album-save-note").dataset.state'), saved ? 'ok' : 'warn');
+      assert.equal(await evaluate('document.querySelectorAll("#results .error-card").length'), 0, 'Album save failure is not generation failure');
+      assert.equal(await evaluate('document.getElementById("statusPill").dataset.state'), 'ok');
+      await waitFor(`document.querySelector('#toasts .${saved ? 'ok' : 'warn'}')?.textContent.includes(${JSON.stringify(saved ? '手机相册' : '未能存入相册')})`, 'Album save toast');
+      if (!saved) {
+        await waitFor(`document.querySelector('#archive .history-item')?.textContent.includes('相册保存反馈 0')`, 'History with album failure');
+        await click('#btnNewChat');
+        await click('#archive .history-item');
+        assert.match(await evaluate('document.querySelector("#results .album-save-note").textContent'), /未能存入相册/);
+      }
+    }
+    await evaluate('window.fetch=window.__beforeAlbumFetch; delete window.__beforeAlbumFetch; delete window.__albumTestItems; delete window.__albumTestResult');
+    console.log('PASS album save success/failure toast, persistent history notice and no generation retry');
+
     await click('#btnNewChat');
     await waitFor('document.getElementById("toasts").children.length === 0', 'Transient notices dismissed');
     for (const width of [820, 1024]) {
@@ -431,6 +504,7 @@ function closeServer(server) {
     }
     throw error;
   } finally {
+    if (releaseGeneration) releaseGeneration();
     if (cdp) { await cdp.send('Browser.close').catch(() => {}); cdp.ws.close(); }
     if (browser) browser.kill();
     await closeServer(app && app.server);

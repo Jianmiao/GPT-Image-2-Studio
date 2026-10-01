@@ -47,6 +47,10 @@ jobs:
           java -cp "$RUNNER_TEMP/native-tests" com.jianmiao.imagestudio.RelayClientTest
       - name: Install Android build tools
         run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+      - name: Verify offline album saving
+        run: |
+          javac -cp "$ANDROID_HOME/platforms/android-35/android.jar" -d "$RUNNER_TEMP/native-tests" android/app/src/main/java/com/jianmiao/imagestudio/AlbumSaver.java test/java/AlbumSaverTest.java
+          java -cp "$RUNNER_TEMP/native-tests:$ANDROID_HOME/platforms/android-35/android.jar" com.jianmiao.imagestudio.AlbumSaverTest
       - uses: gradle/actions/setup-gradle@v4
       - name: Build installable APK
         working-directory: android

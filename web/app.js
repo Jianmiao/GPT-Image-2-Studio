@@ -28,7 +28,7 @@ const el = {
   lbDownload: $('lbDownload'), lbCopyPrompt: $('lbCopyPrompt'), lbReuse: $('lbReuse'),
   helpModal: $('helpModal'), helpClose: $('helpClose'), toasts: $('toasts'),
   btnSettings: $('btnSettings'), settingsModal: $('settingsModal'), settingsClose: $('settingsClose'), btnSaveSettings: $('btnSaveSettings'),
-  settingsFeedback: $('settingsFeedback'),
+  settingsFeedback: $('settingsFeedback'), settingsBusyNotice: $('settingsBusyNotice'),
   btnNewChat: $('btnNewChat'), btnToggleSidebar: $('btnToggleSidebar'), sidebarBackdrop: $('sidebarBackdrop'),
   historySearch: $('historySearch'), chatTitle: $('chatTitle'), composer: $('composer'), conversation: $('conversation'),
   modelLabel: $('modelLabel'), sizeLabel: $('sizeLabel'), styleLabel: $('styleLabel'),
@@ -72,6 +72,8 @@ const state = {
   configReady: false,
   settingsSnapshot: null,
   settingsModelsSnapshot: null,
+  settingsSaving: false,
+  settingsPending: new Set(),
   modalFocus: null,
   modelsProvider: '',
   modelRequestVersion: 0,
@@ -332,18 +334,26 @@ function hideDialog(dialog) {
 const CONNECTION_FIELDS = ['baseUrl', 'apiKey', 'proxy', 'allowPrivateHost', 'streamUpstream',
   'method', 'editEndpoint', 'timeoutSeconds', 'moderation'];
 
+function syncSettingsAvailability() {
+  const locked = state.busy || state.settingsSaving;
+  CONNECTION_FIELDS.forEach(key => { el[key].disabled = locked; });
+  ['btnFetchModels', 'btnTest', 'btnProbeProxy', 'btnSaveSettings'].forEach(key => { el[key].disabled = locked || state.settingsPending.has(key); });
+  el.settingsBusyNotice.hidden = !state.busy;
+}
+
 function openSettings(focusTarget) {
-  if (state.busy) return;
+  if (!el.settingsModal.hidden) return;
   state.settingsSnapshot = Object.fromEntries(CONNECTION_FIELDS.map((key) => [key,
     el[key].type === 'checkbox' ? el[key].checked : el[key].value]));
   state.settingsModelsSnapshot = { allModels: state.allModels, imageModels: state.imageModels,
     modelsProvider: state.modelsProvider, model: el.modelManual.value,
     hint: el.modelHint.textContent, hintClass: el.modelHint.className };
-  showDialog(el.settingsModal, focusTarget || el.baseUrl);
+  syncSettingsAvailability();
+  showDialog(el.settingsModal, state.busy ? $('themePreference') || el.settingsClose : focusTarget || el.baseUrl);
 }
 
 function closeSettings(saved = false) {
-  if (el.btnSaveSettings.disabled) return;
+  if (state.settingsSaving) return;
   if (!saved && state.settingsSnapshot) {
     state.modelRequestVersion++;
     CONNECTION_FIELDS.forEach((key) => {
@@ -373,14 +383,16 @@ function setSettingsFeedback(message) {
 }
 
 async function saveSettings() {
-  if (el.btnSaveSettings.disabled) return;
+  if (state.busy || state.settingsSaving) return;
   if (!/^https?:\/\//i.test(el.baseUrl.value.trim())) {
     toast('请填写以 http:// 或 https:// 开头的供应商地址', 'err'); el.baseUrl.focus(); return;
   }
   const changedProvider = state.settingsSnapshot && state.settingsSnapshot.baseUrl !== el.baseUrl.value;
-  el.btnSaveSettings.disabled = true;
+  state.settingsSaving = true;
+  syncSettingsAvailability();
   const saved = await saveConfig({ connection: true });
-  el.btnSaveSettings.disabled = false;
+  state.settingsSaving = false;
+  syncSettingsAvailability();
   if (!saved) return;
   if (changedProvider && state.modelsProvider !== el.baseUrl.value.trim()) {
     state.allModels = []; state.imageModels = []; renderModelList();
@@ -571,6 +583,7 @@ function renderModelList() {
 }
 
 async function fetchModels({ silent = false } = {}) {
+  if (state.busy || state.settingsSaving || state.settingsPending.has('btnFetchModels')) return;
   const requestVersion = ++state.modelRequestVersion;
   const baseUrl = el.baseUrl.value.trim();
   const apiKey = el.apiKey.value.trim();
@@ -579,6 +592,7 @@ async function fetchModels({ silent = false } = {}) {
   if (!baseUrl) { if (!silent) { toast('请先填写供应商地址', 'err'); el.baseUrl.focus(); } return; }
   if (!apiKey && !hasSavedKey) { if (!silent) { toast('请先填写 API Key', 'err'); el.apiKey.focus(); } return; }
   setStatus('正在拉取模型列表…', 'busy');
+  state.settingsPending.add('btnFetchModels');
   el.btnFetchModels.disabled = true;
   try {
     await saveConfig();
@@ -614,14 +628,17 @@ async function fetchModels({ silent = false } = {}) {
     setSettingsFeedback(e.message);
     toast('获取模型失败：' + e.message, 'err', 7000);
   } finally {
-    el.btnFetchModels.disabled = false;
+    state.settingsPending.delete('btnFetchModels');
+    syncSettingsAvailability();
   }
 }
 
 async function runConnectivityTest() {
+  if (state.busy || state.settingsSaving || state.settingsPending.has('btnTest')) return;
   const baseUrl = el.baseUrl.value.trim();
   setStatus('正在检测连通性…', 'busy');
   setSettingsFeedback('正在检测连接…');
+  state.settingsPending.add('btnTest');
   el.btnTest.disabled = true;
   try {
     const r = await api('/api/test', {
@@ -631,7 +648,7 @@ async function runConnectivityTest() {
         el.apiKey.value.trim() ? { apiKey: el.apiKey.value.trim() } : {}
       ))
     });
-    if (el.settingsModal.hidden || baseUrl !== el.baseUrl.value.trim()) return;
+    if (state.busy || el.settingsModal.hidden || baseUrl !== el.baseUrl.value.trim()) return;
     const lines = r.steps.map((s) => `${s.ok ? '✓' : '✕'} ${s.name}：${s.detail}`).join('\n');
     setSettingsFeedback(lines);
     appendLog(lines.split('\n').map((l) => ({ text: l, cls: l.startsWith('✓') ? 'good' : 'bad' })));
@@ -644,11 +661,13 @@ async function runConnectivityTest() {
     setStatus(r.ok ? '连通性正常' : '连通性异常', r.ok ? 'ok' : 'error');
     toast(r.ok ? '连通性检测通过' : '连接异常，详情见设置窗口', r.ok ? 'ok' : 'err', 6000);
   } catch (e) {
+    if (state.busy) return;
     setStatus('检测失败', 'error');
     setSettingsFeedback(e.message);
     toast('检测失败：' + e.message, 'err', 6000);
   } finally {
-    el.btnTest.disabled = false;
+    state.settingsPending.delete('btnTest');
+    syncSettingsAvailability();
   }
 }
 
@@ -758,7 +777,7 @@ function setBusy(busy) {
   state.busy = busy;
   el.composer.querySelectorAll('input, textarea, select, button').forEach((control) => { control.disabled = busy; });
   el.btnNewChat.disabled = busy;
-  el.btnSettings.disabled = busy;
+  syncSettingsAvailability();
   el.btnGenerate.classList.toggle('is-busy', busy);
   el.btnGenerate.disabled = busy;
   el.btnGenerate.setAttribute('aria-label', busy ? '正在生成图片' : '生成图片');
@@ -797,6 +816,16 @@ function renderLivePlaceholders(n) {
     slots.push(img);
   }
   return slots;
+}
+
+function albumSaveFeedback(item) {
+  const result = item.albumSave;
+  if (!result || !Number.isFinite(result.total) || result.total <= 0) return null;
+  const saved = Math.max(0, Math.min(result.total, Number(result.saved) || 0));
+  const failed = result.total - saved;
+  if (!failed) return { kind: 'ok', message: `已保存 ${saved} 张到手机相册 · ${result.album || 'GPT Image 2'}` };
+  const errors = Array.isArray(result.errors) ? result.errors.filter(Boolean).join('；') : '';
+  return { kind: 'warn', message: `图片已生成，但 ${failed} 张未能存入相册${errors ? '：' + errors : ''}。可点“下载”手动保存。` };
 }
 
 function finishCard(item) {
@@ -858,7 +887,16 @@ function finishCard(item) {
   actions.appendChild(mkBtn('复制提示词', () => copyText(item.prompt)));
   actions.appendChild(mkBtn('复用参数', () => reuseItem(item)));
 
-  body.append(meta, actions);
+  body.append(meta);
+  const albumFeedback = albumSaveFeedback(item);
+  if (albumFeedback) {
+    const note = document.createElement('p');
+    note.className = 'album-save-note';
+    note.dataset.state = albumFeedback.kind;
+    note.textContent = albumFeedback.message;
+    body.append(note);
+  }
+  body.append(actions);
   card.append(media, body);
   el.results.appendChild(card);
   el.stageEmpty.hidden = true;
@@ -901,6 +939,11 @@ function onGenerationDone(item) {
   const secs = (item.elapsedMs / 1000).toFixed(1);
   setStatus('生成完成 · ' + item.count + ' 张', 'ok');
   appendLog([{ text: `完成：${item.count} 张，用时 ${secs}s`, cls: 'good' }]);
+  const albumFeedback = albumSaveFeedback(item);
+  if (albumFeedback) {
+    toast(albumFeedback.message, albumFeedback.kind, albumFeedback.kind === 'warn' ? 9000 : 4200);
+    appendLog([{ text: albumFeedback.message, cls: albumFeedback.kind === 'ok' ? 'good' : '' }]);
+  }
 }
 
 async function generate() {
@@ -1205,6 +1248,8 @@ function bind() {
   document.addEventListener('click', (e) => { if (!e.target.closest('.tool-menu')) closeMenus(); });
   document.querySelectorAll('[data-template]').forEach((btn) => btn.addEventListener('click', () => useTemplate(btn.dataset.template)));
   el.btnProbeProxy.addEventListener('click', async () => {
+    if (state.busy || state.settingsSaving || state.settingsPending.has('btnProbeProxy')) return;
+    state.settingsPending.add('btnProbeProxy');
     el.btnProbeProxy.disabled = true;
     try {
       const r = await api('/api/endpoints', {
@@ -1225,7 +1270,8 @@ function bind() {
       el.proxyHint.textContent = '探测失败：' + e.message;
       toast('探测失败：' + e.message, 'err');
     } finally {
-      el.btnProbeProxy.disabled = false;
+      state.settingsPending.delete('btnProbeProxy');
+      syncSettingsAvailability();
     }
   });
 
@@ -1347,7 +1393,7 @@ async function boot() {
     el.proxyHint.textContent = 'auto 使用系统代理或 VPN；off 只关闭 HTTP 代理，仍遵循系统 VPN。仅开启本地代理端口时，请填写手机上的 HTTP 代理地址。';
     el.helpModal.querySelectorAll('p').forEach((p) => {
       if (p.textContent.includes('.gptimage2/gallery/')) {
-        p.textContent = '图片与提示词历史保存在应用私有目录；点下载可导出图片。手机与电脑版数据分别保存。';
+        p.textContent = '生成的图片会自动保存到手机相册 Pictures / GPT Image 2。图片与提示词历史仍保存在应用私有目录；若相册保存失败，可点“下载”手动保存。手机与电脑版数据分别保存。';
       }
     });
   }

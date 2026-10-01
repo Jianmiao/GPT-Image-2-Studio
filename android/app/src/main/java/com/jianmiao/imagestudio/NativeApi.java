@@ -40,6 +40,7 @@ public final class NativeApi {
     private final SharedPreferences prefs;
     private final ConnectivityManager connectivity;
     private final File gallery;
+    private final AlbumSaver albumSaver;
     private final AtomicFile history;
     private final Object historyLock = new Object();
     private final RelayClient relay = new RelayClient();
@@ -52,6 +53,7 @@ public final class NativeApi {
     private static final Pattern IMAGE_MODEL = Pattern.compile("gpt.?image|dall.?e|image|flux|seedream|nano.?banana|ideogram|recraft|stable.?diffusion", Pattern.CASE_INSENSITIVE);
 
     public NativeApi(Context context) {
+        albumSaver = new AlbumSaver(context);
         connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         prefs = context.getSharedPreferences("image-studio-private", Context.MODE_PRIVATE);
         gallery = new File(context.getFilesDir(), "gallery");
@@ -93,7 +95,7 @@ public final class NativeApi {
             if (!path.startsWith("/api/") || uri.getHost() != null) return new Result(403, object("error", "拒绝非本地 API 请求"));
             String route = method + " " + uri.getPath();
             switch (route) {
-                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.2"));
+                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.3"));
                 case "GET /api/config": return new Result(200, publicConfig(config()));
                 case "POST /api/config": return new Result(200, saveConfig(input));
                 case "POST /api/endpoints": return new Result(200, endpoints(merged(input)));
@@ -318,6 +320,8 @@ public final class NativeApi {
         if (parsed.images.isEmpty()) throw new ApiFailure(502, "上游响应中没有完整图片。请核对供应商任务记录，本工具没有自动重发。",
             truncate(parsed.text, 12000), response.header("x-request-id"), "upstream", "no_image_result");
         JSONArray saved = new JSONArray();
+        int albumSaved = 0;
+        JSONArray albumErrors = new JSONArray();
         for (int i = 0; i < parsed.images.size(); i++) {
             ImageResult image = parsed.images.get(i);
             try { saved.put(persistImage(id, i, image, cfg)); }
@@ -330,12 +334,16 @@ public final class NativeApi {
                 }
                 else saved.put(object("url", "data:" + image.mime + ";base64," + image.b64, "inline", true, "mime", image.mime, "saveError", e.getMessage()));
             }
+            JSONObject stored = saved.getJSONObject(i);
+            if (stored.optBoolean("albumSaved")) albumSaved++;
+            else albumErrors.put(stored.optString("albumError", "图片尚未保存到本机，未能自动写入相册。可从结果中手动下载。"));
         }
         SimpleDateFormat iso = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US); iso.setTimeZone(TimeZone.getTimeZone("UTC"));
         JSONObject item = object("id", id, "createdAt", iso.format(new Date()), "elapsedMs", System.currentTimeMillis() - started,
             "model", model, "prompt", prompt, "size", size, "quality", cfg.optString("quality", "auto"), "background", cfg.optString("background", "auto"),
             "outputFormat", cfg.optString("outputFormat", "auto"), "count", saved.length(), "method", label, "usage", parsed.usage,
-            "text", parsed.text, "hasRefs", refs.length() > 0, "refCount", refs.length(), "images", saved);
+            "text", parsed.text, "hasRefs", refs.length() > 0, "refCount", refs.length(), "images", saved,
+            "albumSave", object("saved", albumSaved, "total", saved.length(), "album", "GPT Image 2", "errors", albumErrors));
         try { addHistory(item); }
         catch (Exception e) { item.put("historyError", "图片已返回，但历史记录未能保存：" + e.getMessage()); }
         return item;
@@ -472,7 +480,15 @@ public final class NativeApi {
         String mime = imageMime(bytes); String name = id + "-" + index + "." + extension(mime);
         File file = new File(gallery, name);
         try (FileOutputStream stream = new FileOutputStream(file)) { stream.write(bytes); }
-        return object("url", "/gallery/" + name, "bytes", bytes.length, "mime", mime);
+        JSONObject result = object("url", "/gallery/" + name, "bytes", bytes.length, "mime", mime);
+        // Export only the completed local image. Album failures must not turn a
+        // successful generation into an error or trigger another upstream request.
+        try { result.put("albumUri", albumSaver.save(file, mime)); result.put("albumSaved", true); }
+        catch (Exception e) {
+            result.put("albumSaved", false);
+            result.put("albumError", e.getMessage() == null ? "无法写入手机相册，请检查存储空间与权限。" : e.getMessage());
+        }
+        return result;
     }
     private static String extension(String mime) { return mime.contains("jpeg") || mime.contains("jpg") ? "jpg" : mime.contains("webp") ? "webp" : mime.contains("gif") ? "gif" : "png"; }
     private static String imageMime(byte[] b) throws IOException {

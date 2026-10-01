@@ -11,8 +11,8 @@ android {
         applicationId 'com.jianmiao.imagestudio'
         minSdk 26
         targetSdk 35
-        versionCode 3
-        versionName '1.2.2'
+        versionCode 4
+        versionName '1.2.3'
         testInstrumentationRunner 'com.jianmiao.imagestudio.test.PickerInstrumentation'
     }
 

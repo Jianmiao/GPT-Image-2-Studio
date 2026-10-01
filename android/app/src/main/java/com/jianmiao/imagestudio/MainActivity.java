@@ -40,7 +40,7 @@ import java.util.concurrent.Executors;
 /** A local, offline-capable WebView UI backed by native Android storage and networking. */
 public final class MainActivity extends Activity {
     public static final String ORIGIN = "https://appassets.androidplatform.net";
-    private static final int PICK_IMAGES = 101, SAVE_IMAGE = 102, PHOTO_ACCESS = 103;
+    private static final int PICK_IMAGES = 101, SAVE_IMAGE = 102, PHOTO_ACCESS = 103, ALBUM_WRITE = 104;
     private WebView web;
     private android.widget.FrameLayout webRoot;
     private boolean lightTheme;
@@ -54,6 +54,7 @@ public final class MainActivity extends Activity {
     private volatile boolean trustedPage;
     private volatile boolean destroyed;
     private NativeApi.Download pendingExport;
+    private JSONObject pendingGeneration;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -236,6 +237,37 @@ public final class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(request, permissions, grants);
         if (request == PHOTO_ACCESS && photoPicker != null) photoPicker.refreshAccess();
+        if (request == ALBUM_WRITE) {
+            JSONObject queued = pendingGeneration;
+            pendingGeneration = null;
+            // Permission denial affects album export only; dispatch the original
+            // generation exactly once, with its original parameters.
+            if (queued != null && !destroyed && trustedPage) dispatchRequest(queued);
+        }
+    }
+    private void dispatchRequest(JSONObject request) {
+        workers.execute(() -> {
+            NativeApi.Result result = api.handle(request);
+            respond(request.optString("id"), result.status, result.body.toString());
+        });
+    }
+    private void prepareGeneration(JSONObject request) {
+        runOnUiThread(() -> {
+            if (destroyed || !trustedPage) return;
+            if (pendingGeneration != null) {
+                respond(request.optString("id"), 409, "{\"error\":\"请先完成相册权限选择，没有重复提交。\"}");
+                return;
+            }
+            if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                || getPreferences(MODE_PRIVATE).getBoolean("album-write-requested", false)) {
+                dispatchRequest(request);
+                return;
+            }
+            pendingGeneration = request;
+            getPreferences(MODE_PRIVATE).edit().putBoolean("album-write-requested", true).apply();
+            try { requestPermissions(new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, ALBUM_WRITE); }
+            catch (Exception e) { pendingGeneration = null; dispatchRequest(request); }
+        });
     }
     private void respond(String id, int status, String body) {
         runOnUiThread(() -> {
@@ -270,11 +302,9 @@ public final class MainActivity extends Activity {
                     // Page-scoped monotonic IDs: preserve all generation IDs for the session.
                     if (seenRequests.size() > 20000) { respond(id, 429, "{\"error\":\"请重新打开应用后继续\"}"); return; }
                 }
-                String finalId = id;
-                workers.execute(() -> {
-                    NativeApi.Result result = api.handle(request);
-                    respond(finalId, result.status, result.body.toString());
-                });
+                if (Build.VERSION.SDK_INT <= 28 && "/api/generate".equals(request.optString("path"))
+                    && "POST".equalsIgnoreCase(request.optString("method"))) prepareGeneration(request);
+                else dispatchRequest(request);
             } catch (Exception e) { respond(id, 400, "{\"error\":\"无效的本地请求\"}"); }
         }
         @JavascriptInterface public void copyText(String text) {
@@ -352,6 +382,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onDestroy() {
         destroyed = true; trustedPage = false;
+        pendingGeneration = null;
         if (photoPicker != null) { photoPicker.dismissQuietly(); photoPicker = null; }
         if (fileCallback != null) { fileCallback.onReceiveValue(null); fileCallback = null; }
         web.removeJavascriptInterface("NativeBridge"); web.destroy();
