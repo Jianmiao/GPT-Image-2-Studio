@@ -312,6 +312,7 @@ function closeServer(server) {
     assert.equal(await evaluate('document.documentElement.dataset.theme'), 'dark', 'Closing settings does not discard appearance preferences');
     await send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
     assert.equal(postCount() - before, 1, 'JSON generation sends once');
+    assert.match(await evaluate('document.querySelector("#results .local-save-note").textContent'), /已自动保存到 gallery 文件夹/);
     assert.equal(requests.filter((r) => r.method === 'POST').at(-1).payload.size, '1280x720');
     await shot('desktop-result');
     console.log('PASS JSON generation and final result');
@@ -431,6 +432,7 @@ function closeServer(server) {
       const message = await evaluate('document.querySelector("#results .album-save-note").textContent');
       assert.match(message, saved ? /已保存 1 张到手机相册 · GPT Image 2/ : /图片已生成，但 1 张未能存入相册.*未授予相册写入权限.*手动保存/);
       assert.equal(await evaluate('document.querySelector("#results .album-save-note").dataset.state'), saved ? 'ok' : 'warn');
+      assert.equal(await evaluate('document.querySelectorAll("#results .local-save-note").length'), 0, 'Native album feedback does not repeat desktop gallery success');
       assert.equal(await evaluate('document.querySelectorAll("#results .error-card").length'), 0, 'Album save failure is not generation failure');
       assert.equal(await evaluate('document.getElementById("statusPill").dataset.state'), 'ok');
       await waitFor(`document.querySelector('#toasts .${saved ? 'ok' : 'warn'}')?.textContent.includes(${JSON.stringify(saved ? '手机相册' : '未能存入相册')})`, 'Album save toast');
@@ -443,6 +445,35 @@ function closeServer(server) {
     }
     await evaluate('window.fetch=window.__beforeAlbumFetch; delete window.__beforeAlbumFetch; delete window.__albumTestItems; delete window.__albumTestResult');
     console.log('PASS album save success/failure toast, persistent history notice and no generation retry');
+
+    await click('#btnNewChat');
+    await evaluate(`window.__beforeLocalSaveFetch=window.fetch; window.__localSaveTestId=null; window.fetch=async(...args)=>{
+      const response=await window.__beforeLocalSaveFetch(...args);
+      if(!response.ok || !['/api/generate','/api/history'].includes(args[0])) return response;
+      const body=await response.json();
+      const mark=item=>{item.images[0].saveError='本地模拟磁盘写入失败';item.historyError='本地模拟记录写入失败';};
+      if(args[0]==='/api/generate' && body.item){mark(body.item);window.__localSaveTestId=body.item.id;}
+      if(args[0]==='/api/history' && body.items)body.items.forEach(item=>{if(item.id===window.__localSaveTestId)mark(item)});
+      return new Response(JSON.stringify(body),{status:response.status,headers:response.headers});
+    }`);
+    await fill('prompt', '本地测试：图片和历史保存失败提示');
+    before = postCount();
+    await click('#btnGenerate');
+    await success('Local storage failure presentation');
+    assert.equal(postCount() - before, 1, 'Storage failure feedback does not submit another generation');
+    const storageWarning = await evaluate('document.querySelector("#results .local-save-note").textContent');
+    assert.match(storageWarning, /未能自动保存到 gallery.*本地模拟磁盘写入失败/);
+    assert.match(storageWarning, /生成记录未能保存.*本地模拟记录写入失败/);
+    assert.doesNotMatch(storageWarning, /已自动保存/);
+    assert.equal(await evaluate('document.querySelector("#results .local-save-note").dataset.state'), 'warn');
+    assert.equal(await evaluate('document.querySelectorAll("#results .error-card").length'), 0, 'Local save failure is not a generation failure');
+    assert.equal(await evaluate('document.getElementById("statusPill").dataset.state'), 'ok');
+    await waitFor(`document.querySelector('#archive .history-item')?.textContent.includes('图片和历史保存失败提示')`, 'Stored error fixture loaded in history');
+    await click('#btnNewChat');
+    await click('#archive .history-item');
+    assert.match(await evaluate('document.querySelector("#results .local-save-note").textContent'), /本地模拟磁盘写入失败/);
+    await evaluate('window.fetch=window.__beforeLocalSaveFetch;delete window.__beforeLocalSaveFetch;delete window.__localSaveTestId');
+    console.log('PASS gallery success, local save/history warnings, persistent feedback and no generation retry');
 
     await click('#btnNewChat');
     await waitFor('document.getElementById("toasts").children.length === 0', 'Transient notices dismissed');

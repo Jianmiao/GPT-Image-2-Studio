@@ -371,9 +371,9 @@ select[size] option { padding: 8px; }
   max-width: 420px;
   margin-top: 10px;
 }
-.album-save-note { font-size: 14px; line-height: 1.7; margin: 13px 0 0; overflow-wrap: anywhere; color: var(--ok); }
-.album-save-note[data-state="warn"] { color: #d9bd86; }
-:root[data-theme="light"] .album-save-note[data-state="warn"] { color: #816323; }
+.album-save-note, .local-save-note { font-size: 14px; line-height: 1.7; margin: 13px 0 0; overflow-wrap: anywhere; white-space: pre-line; color: var(--ok); }
+.album-save-note[data-state="warn"], .local-save-note[data-state="warn"] { color: #d9bd86; }
+:root[data-theme="light"] .album-save-note[data-state="warn"], :root[data-theme="light"] .local-save-note[data-state="warn"] { color: #816323; }
 
 /* Light appearance uses the same layout and contrast hierarchy as dark mode. */
 :root[data-theme="light"] {

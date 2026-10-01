@@ -80,6 +80,7 @@ function createMockRelay({ mode = 'normal' } = {}) {
   const png = makePng();
   const log = [];
   const server = http.createServer(async (req, res) => {
+    res.setHeader('Connection', 'close');
     const body = await readAll(req);
     log.push({ method: req.method, url: req.url, auth: req.headers.authorization || '', size: body.length });
     const send = (code, obj, headers) => {
@@ -87,6 +88,12 @@ function createMockRelay({ mode = 'normal' } = {}) {
       res.writeHead(code, Object.assign({ 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(s) }, headers || {}));
       res.end(s);
     };
+    if (req.url === '/fixture/out.png') {
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': png.length });
+      return res.end(png);
+    }
+    if (req.url === '/fixture/missing.png') return send(503, { error: 'local image storage unavailable' });
+    const imageUrl = 'http://127.0.0.1:' + server.address().port + '/fixture/out.png';
     const auth = String(req.headers.authorization || '');
     if (!auth.startsWith('Bearer ')) return send(401, { error: { message: '缺少 API Key' } });
     if (auth.slice(7) !== VALID_KEY) {
@@ -109,7 +116,8 @@ function createMockRelay({ mode = 'normal' } = {}) {
     }
 
     if (req.url === '/v1/images/generations') {
-      if (mode === 'url-result') return send(200, { created: 1, data: [{ url: 'https://cdn.mock.example/out.png' }] });
+      if (mode === 'url-result') return send(200, { created: 1, data: [{ url: imageUrl }] });
+      if (mode === 'url-failure') return send(200, { created: 1, data: [{ url: imageUrl.replace('out.png', 'missing.png') }] });
       if (mode === 'no-images') return send(200, { created: 1, data: [] });
       if (mode === 'broken-json') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end('<html>bad gateway</html>'); }
       return send(200, {
@@ -128,7 +136,7 @@ function createMockRelay({ mode = 'normal' } = {}) {
 
     if (req.url === '/v1/chat/completions') {
       return send(200, {
-        choices: [{ message: { role: 'assistant', content: '![img](https://cdn.mock.example/out.png)' } }]
+        choices: [{ message: { role: 'assistant', content: '![img](' + imageUrl + ')' } }]
       });
     }
 
@@ -283,10 +291,30 @@ async function sse(url, payload) {
       baseUrl: 'http://127.0.0.1:' + mockUrl4.server.address().port, apiKey: key, allowPrivateHost: true,
       model: 'gpt-image-2', prompt: 'URL 返回', count: 1, stream: false
     });
-    ok('支持上游返回图片 URL', r.json && r.json.item && r.json.item.images[0].url === 'https://cdn.mock.example/out.png', r.text.slice(0, 200));
-    ok('外部 URL 被标记为 remote', r.json && r.json.item.images[0].remote === true, JSON.stringify(r.json && r.json.item.images));
+    const image = r.json && r.json.item && r.json.item.images[0];
+    ok('上游图片 URL 自动保存到 gallery', image && image.url.startsWith('/gallery/'), r.text.slice(0, 200));
+    if (image && image.url.startsWith('/gallery/')) {
+      const actual = fs.readFileSync(path.join(TEST_DATA_DIR, image.url));
+      ok('URL 图片逐字节保留原文件', actual.equals(makePng()), 'bytes=' + actual.length);
+    }
+    const imageGets = mockUrl4.log.filter(entry => entry.url === '/fixture/out.png');
+    ok('下载图片只发一次 GET 且不转发密钥', imageGets.length === 1 && imageGets[0].method === 'GET' && imageGets[0].auth === '', JSON.stringify(imageGets));
+    ok('URL 图片保存不重复生图', mockUrl4.log.filter(entry => entry.method === 'POST').length === 1);
   } catch (e) { ok('URL 返回', false, e.message); }
   mockUrl4.server.close();
+
+  const missingImage = createMockRelay({ mode: 'url-failure' });
+  await new Promise(resolve => missingImage.server.listen(0, '127.0.0.1', resolve));
+  try {
+    const r = await post(base + '/api/generate', {
+      baseUrl: 'http://127.0.0.1:' + missingImage.server.address().port, apiKey: key, allowPrivateHost: true,
+      model: 'gpt-image-2', prompt: 'local failed image download', count: 1, stream: false, proxy: 'off'
+    });
+    const image = r.json && r.json.item && r.json.item.images[0];
+    ok('图片下载失败仍保留生成成功及保存错误', r.status === 200 && r.json.ok && image.remote && Boolean(image.saveError), r.text.slice(0, 200));
+    ok('下载失败不重发生图请求', missingImage.log.filter(entry => entry.method === 'POST').length === 1);
+  } catch (e) { ok('URL 下载失败保留结果', false, e.message); }
+  missingImage.server.close();
 
   // 9. 内网地址默认拦截
   try {

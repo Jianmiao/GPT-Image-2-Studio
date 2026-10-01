@@ -828,6 +828,19 @@ function albumSaveFeedback(item) {
   return { kind: 'warn', message: `图片已生成，但 ${failed} 张未能存入相册${errors ? '：' + errors : ''}。可点“下载”手动保存。` };
 }
 
+function localSaveFeedback(item) {
+  const failed = item.images.map((image, index) => ({ image, index })).filter(({ image }) => image.saveError);
+  const messages = [];
+  if (failed.length) {
+    const errors = failed.map(({ image, index }) => `图 ${index + 1}：${image.saveError}`).join('；');
+    messages.push(`图片已生成，但 ${failed.length} 张未能自动保存到 gallery 文件夹（${errors}）。请点“下载”手动保存。`);
+  } else if (!item.albumSave && !window.NativeBridge && item.images.length && item.images.every(image => String(image.url || '').startsWith('/gallery/'))) {
+    messages.push('已自动保存到 gallery 文件夹');
+  }
+  if (item.historyError) messages.push(`生成记录未能保存：${item.historyError}。请保留图片并复制提示词，关闭页面后可能无法从历史记录找回。`);
+  return messages.length ? { kind: failed.length || item.historyError ? 'warn' : 'ok', message: messages.join('\n') } : null;
+}
+
 function finishCard(item) {
   const card = document.createElement('article');
   card.className = 'result-card';
@@ -896,6 +909,14 @@ function finishCard(item) {
     note.textContent = albumFeedback.message;
     body.append(note);
   }
+  const localFeedback = localSaveFeedback(item);
+  if (localFeedback) {
+    const note = document.createElement('p');
+    note.className = 'local-save-note';
+    note.dataset.state = localFeedback.kind;
+    note.textContent = localFeedback.message;
+    body.append(note);
+  }
   body.append(actions);
   card.append(media, body);
   el.results.appendChild(card);
@@ -943,6 +964,11 @@ function onGenerationDone(item) {
   if (albumFeedback) {
     toast(albumFeedback.message, albumFeedback.kind, albumFeedback.kind === 'warn' ? 9000 : 4200);
     appendLog([{ text: albumFeedback.message, cls: albumFeedback.kind === 'ok' ? 'good' : '' }]);
+  }
+  const localFeedback = localSaveFeedback(item);
+  if (localFeedback && localFeedback.kind === 'warn') {
+    toast(localFeedback.message, 'warn', 9000);
+    appendLog([{ text: localFeedback.message }]);
   }
 }
 

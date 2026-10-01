@@ -167,14 +167,14 @@ async function consumeUpstream(res, onPartial) {
     }
     return await consumeSse(res, onPartial);
   }
+  if (/^image\//.test(ctype)) {
+    const bytes = Buffer.from(await res.arrayBuffer());
+    return { images: [{ b64: bytes.toString('base64'), mime: imageMime(bytes) }], usage: null, text: '' };
+  }
   const text = await res.text();
   let json = null;
   try { json = JSON.parse(text); } catch (_) { json = null; }
   if (!json) {
-    // 有些中转站直接返回二进制图片
-    if (/^image\//.test(ctype)) {
-      return { images: [{ b64: Buffer.from(text, 'binary').toString('base64'), mime: ctype }], usage: null, text: '' };
-    }
     throw new UpstreamError({ status: res.status, message: '上游返回了非 JSON 内容：' + relay.shortBody(text), raw: relay.shortBody(text) });
   }
   return {
@@ -430,22 +430,105 @@ async function runMethod(method, variant, params, opts, timeoutMs, hooks) {
 
 /* --------------------------- 落盘历史 --------------------------- */
 
-function persistImages(id, images) {
+function imageMime(bytes) {
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
+  if (bytes.length >= 6 && /^GIF8[79]a$/.test(bytes.subarray(0, 6).toString('ascii'))) return 'image/gif';
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  throw new Error('图片下载内容不是有效的 PNG、JPEG、WebP 或 GIF');
+}
+
+async function downloadImage(url, options = {}) {
+  const fetchImpl = options.fetchImpl || net.makeFetch('auto');
+  const ctrl = new AbortController();
+  const timeoutMs = 180000;
+  const maxBytes = 128 * 1024 * 1024;
+  let reader;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+    if (reader) reader.cancel().catch(() => {});
+  }, timeoutMs);
+  try {
+    let target = new URL(url);
+    for (let redirects = 0; redirects <= 3; redirects++) {
+      if (!/^https?:$/.test(target.protocol) || target.username || target.password) throw new Error('图片链接仅支持不带用户名密码的 HTTP / HTTPS 地址');
+      if (!options.allowPrivate && relay.isPrivateHost(target.hostname)) throw new Error('图片链接指向内网地址，请检查允许内网地址设置');
+      // This is only a GET for the existing image, with no provider credentials.
+      const response = await fetchImpl(target.toString(), { method: 'GET', headers: { Accept: 'image/*', 'Accept-Encoding': 'identity' },
+        redirect: 'manual', signal: ctrl.signal, timeoutMs });
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const next = response.headers.get('location');
+        await response.body?.cancel();
+        if (!next || redirects === 3) throw new Error('图片链接重定向过多或缺少目标地址');
+        target = new URL(next, target);
+        continue;
+      }
+      if (!response.ok) { await response.body?.cancel(); throw new Error('图片下载失败 HTTP ' + response.status); }
+      const lengthHeader = response.headers.get('content-length');
+      const expectedLength = /^\d+$/.test(lengthHeader || '') ? Number(lengthHeader) : null;
+      if (expectedLength > maxBytes) {
+        await response.body?.cancel();
+        throw new Error('图片超过 128 MB 保存限制');
+      }
+      if (expectedLength === 0) { await response.body?.cancel(); throw new Error('图片下载内容为空'); }
+      const chunks = [];
+      let size = 0;
+      reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (timedOut) throw new Error('下载图片超时，请使用结果中的下载按钮重试保存');
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) { await reader.cancel(); throw new Error('图片超过 128 MB 保存限制'); }
+        chunks.push(Buffer.from(value));
+        // Some image CDNs keep the connection alive even after the complete body.
+        if (expectedLength !== null && size >= expectedLength) break;
+      }
+      if (expectedLength !== null && size !== expectedLength) throw new Error('图片下载不完整，请手动下载保存');
+      const bytes = Buffer.concat(chunks, size);
+      return { bytes, mime: imageMime(bytes) };
+    }
+  } catch (e) {
+    if (timedOut) throw new Error('下载图片超时，请使用结果中的下载按钮重试保存');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+    ctrl.abort();
+    if (reader) reader.releaseLock();
+  }
+}
+
+async function persistImages(id, images, options = {}) {
   const saved = [];
-  images.forEach((img, i) => {
+  for (const [i, img] of images.entries()) {
     if (img.b64) {
       const ext = extFromMime(img.mime || 'image/png');
       try {
         const info = store.saveImage(id, i, img.b64, ext);
-        saved.push({ url: info.url, bytes: info.bytes, mime: 'image/' + ext });
-      } catch (_) {
-        saved.push({ url: 'data:' + (img.mime || 'image/png') + ';base64,' + img.b64, inline: true });
+        saved.push({ url: info.url, bytes: info.bytes, mime: ext === 'jpg' ? 'image/jpeg' : 'image/' + ext });
+      } catch (e) {
+        saved.push({ url: 'data:' + (img.mime || 'image/png') + ';base64,' + img.b64, inline: true, saveError: '本地图片保存失败：' + (e.code || '无法写入 gallery 文件夹') });
       }
     } else if (img.url) {
-      saved.push({ url: img.url, remote: !img.url.startsWith('data:') });
+      try {
+        const data = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i.exec(img.url);
+        const bytes = data ? Buffer.from(data[2], 'base64') : null;
+        const image = data ? { bytes, mime: imageMime(bytes) } : await downloadImage(img.url, options);
+        const info = store.saveImage(id, i, image.bytes.toString('base64'), extFromMime(image.mime));
+        saved.push({ url: info.url, bytes: info.bytes, mime: image.mime });
+      } catch (e) {
+        saved.push({ url: img.url, remote: !img.url.startsWith('data:'), saveError: '本地图片保存失败：' + (e.code || e.message || '请手动下载') });
+      }
     }
-  });
+  }
   return saved;
+}
+
+function persistHistory(item) {
+  try { store.addHistory(item); }
+  catch (e) { item.historyError = '图片已生成，但历史记录未能保存：' + (e.code || '无法写入历史文件'); }
 }
 
 /* --------------------------- HTTP 路由 --------------------------- */
@@ -502,7 +585,8 @@ async function handleGenerate(req, res, body) {
     sse.send({ type: 'start', id, method: params.method, model: params.model, at: Date.now() });
     try {
       const result = await generateWithFallback(params, { baseUrl, apiKey, fetchImpl }, hooks);
-      const images = persistImages(id, result.images);
+      hooks.onPhase('图片已生成，正在保存到本地 gallery 文件夹…');
+      const images = await persistImages(id, result.images, { fetchImpl, allowPrivate });
       const elapsed = Date.now() - started;
       const item = {
         id,
@@ -522,7 +606,7 @@ async function handleGenerate(req, res, body) {
         refCount: params.images.length,
         images
       };
-      store.addHistory(item);
+      persistHistory(item);
       sse.send({ type: 'done', item });
     } catch (e) {
       sse.send({
@@ -543,7 +627,7 @@ async function handleGenerate(req, res, body) {
 
   // 非流式（同步 JSON）
   const result = await generateWithFallback(params, { baseUrl, apiKey, fetchImpl }, hooks);
-  const images = persistImages(id, result.images);
+  const images = await persistImages(id, result.images, { fetchImpl, allowPrivate });
   const item = {
     id, createdAt: new Date().toISOString(), elapsedMs: Date.now() - started,
     model: params.model, prompt: params.prompt, size: params.size, quality: params.quality,
@@ -551,7 +635,7 @@ async function handleGenerate(req, res, body) {
     count: result.images.length, method: result.method, usage: result.usage || null,
     text: result.text || '', hasRefs: params.images.length > 0, refCount: params.images.length, images
   };
-  store.addHistory(item);
+  persistHistory(item);
   return item;
 }
 

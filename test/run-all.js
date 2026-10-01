@@ -14,6 +14,8 @@ const suites = [
   ['网关异常归因', 'gateway-errors.js'],
   ['代理响应形状', 'proxy-shapes.js'],
   ['网络层端到端', 'net-e2e.js'],
+  ['图片二进制传输', 'net-binary.js'],
+  ['电脑图片自动保存', 'desktop-gallery.js'],
   ['全链路冒烟', 'smoke.js']
 ];
 

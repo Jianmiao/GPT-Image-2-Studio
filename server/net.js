@@ -450,17 +450,17 @@ function directFetch(url, init, timeoutMs) {
 /* --------------------------- 对外：fetch 形状 --------------------------- */
 
 function toResponse(rt) {
-  const readerText = async () => {
+  const readerBytes = async () => {
     const reader = rt.body.getReader();
-    const decoder = new TextDecoder('utf-8');
-    let out = '';
+    const chunks = [];
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      out += decoder.decode(value, { stream: true });
+      chunks.push(Buffer.from(value));
     }
-    return out + decoder.decode();
+    return Buffer.concat(chunks);
   };
+  const readerText = async () => new TextDecoder('utf-8').decode(await readerBytes());
   return {
     ok: rt.status >= 200 && rt.status < 300,
     status: rt.status,
@@ -468,7 +468,10 @@ function toResponse(rt) {
     body: rt.body,
     text: readerText,
     json: async () => JSON.parse(await readerText()),
-    arrayBuffer: async () => Buffer.from(await readerText(), 'utf8'),
+    arrayBuffer: async () => {
+      const bytes = await readerBytes();
+      return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    },
     _viaProxy: !!(rt.proxyUrl),
     _tunnelInfo: rt.info
   };
