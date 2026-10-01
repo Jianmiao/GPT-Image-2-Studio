@@ -52,9 +52,8 @@ final class PhotoPickerDialog extends Dialog {
     }
 
     private static final int PAGE_SIZE = 128;
-    private static final int SURFACE = Color.rgb(28, 28, 28);
-    private static final int TEXT = Color.rgb(238, 238, 238);
-    private static final int MUTED = Color.rgb(170, 170, 170);
+    private final int SURFACE, TEXT, MUTED, secondarySurface;
+    private final boolean lightTheme;
     private final Activity activity;
     private final Listener listener;
     private final int limit;
@@ -80,8 +79,13 @@ final class PhotoPickerDialog extends Dialog {
     private int queryVersion;
     private float dragStart;
 
-    PhotoPickerDialog(Activity activity, int limit, Listener listener) {
-        super(activity, android.R.style.Theme_Material_NoActionBar);
+    PhotoPickerDialog(Activity activity, int limit, boolean lightTheme, Listener listener) {
+        super(activity, lightTheme ? android.R.style.Theme_Material_Light_NoActionBar : android.R.style.Theme_Material_NoActionBar);
+        this.lightTheme = lightTheme;
+        SURFACE = lightTheme ? Color.rgb(255, 255, 255) : Color.rgb(28, 28, 28);
+        TEXT = lightTheme ? Color.rgb(31, 35, 41) : Color.rgb(238, 238, 238);
+        MUTED = lightTheme ? Color.rgb(95, 101, 112) : Color.rgb(170, 170, 170);
+        secondarySurface = lightTheme ? Color.rgb(240, 242, 246) : Color.rgb(47, 47, 47);
         this.activity = activity;
         this.limit = Math.max(1, Math.min(10, limit));
         this.listener = listener;
@@ -107,6 +111,7 @@ final class PhotoPickerDialog extends Dialog {
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING);
         window.setStatusBarColor(Color.TRANSPARENT);
         window.setNavigationBarColor(SURFACE);
+        if (lightTheme) window.getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
         if (Build.VERSION.SDK_INT >= 30) window.setDecorFitsSystemWindows(false);
 
         root = new FrameLayout(activity);
@@ -176,7 +181,7 @@ final class PhotoPickerDialog extends Dialog {
         LinearLayout actions = row();
         actions.setPadding(dp(14), 0, dp(14), dp(8));
         TextView files = button("文件 / 系统相册", 15, R.id.picker_files);
-        files.setBackground(round(Color.rgb(47, 47, 47), 12));
+        files.setBackground(round(secondarySurface, 12));
         files.setPadding(dp(14), 0, dp(14), 0);
         files.setOnClickListener(v -> { handled = true; dismiss(); listener.onFiles(); });
         actions.addView(files, new LinearLayout.LayoutParams(-2, dp(44)));
@@ -187,7 +192,7 @@ final class PhotoPickerDialog extends Dialog {
 
         hint = button("", 14, R.id.picker_permission_hint);
         hint.setPadding(dp(16), dp(8), dp(16), dp(8));
-        hint.setTextColor(Color.rgb(183, 209, 247));
+        hint.setTextColor(lightTheme ? Color.rgb(44, 86, 154) : Color.rgb(183, 209, 247));
         hint.setOnClickListener(v -> listener.onRequestAccess());
         panel.addView(hint, new LinearLayout.LayoutParams(-1, -2));
 
@@ -233,7 +238,7 @@ final class PhotoPickerDialog extends Dialog {
 
         LinearLayout footer = row();
         footer.setPadding(dp(18), dp(12), dp(18), dp(12));
-        footer.setBackgroundColor(Color.rgb(35, 35, 35));
+        footer.setBackgroundColor(lightTheme ? SURFACE : Color.rgb(35, 35, 35));
         count = label("已选 0 / " + limit, 16, MUTED);
         footer.addView(count, new LinearLayout.LayoutParams(0, dp(46), 1));
         confirm = button("添加", 16, R.id.picker_confirm);
@@ -453,7 +458,7 @@ final class PhotoPickerDialog extends Dialog {
             if (recycled instanceof FrameLayout) cell = (FrameLayout) recycled;
             else {
                 cell = new FrameLayout(activity);
-                cell.setBackgroundColor(Color.rgb(48, 48, 48));
+                cell.setBackgroundColor(secondarySurface);
                 ImageView image = new ImageView(activity);
                 image.setScaleType(ImageView.ScaleType.CENTER_CROP);
                 image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
@@ -498,7 +503,7 @@ final class PhotoPickerDialog extends Dialog {
                 row.setPadding(dp(18), dp(10), dp(18), dp(10));
                 ImageView cover = new ImageView(activity);
                 cover.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                cover.setBackground(round(Color.rgb(45, 45, 45), 9));
+                cover.setBackground(round(secondarySurface, 9));
                 cover.setClipToOutline(true);
                 row.addView(cover, new LinearLayout.LayoutParams(dp(78), dp(78)));
                 LinearLayout labels = new LinearLayout(activity);

@@ -5,9 +5,14 @@ import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
+import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketAddress;
 import java.net.SocketException;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -35,6 +40,16 @@ public final class RelayClientTest {
 
     private interface Handler { void handle(Socket socket, Request request) throws Exception; }
     private interface Throwing { void run() throws Exception; }
+    private static final class SelectedProxy extends ProxySelector implements AutoCloseable {
+        private final ProxySelector previous = ProxySelector.getDefault();
+        private final List<Proxy> choices;
+        final List<URI> selected = new ArrayList<>();
+        int failures;
+        SelectedProxy(Proxy... choices) { this.choices = List.of(choices); ProxySelector.setDefault(this); }
+        @Override public List<Proxy> select(URI target) { selected.add(target); return choices; }
+        @Override public void connectFailed(URI target, SocketAddress address, IOException failure) { failures++; }
+        @Override public void close() { ProxySelector.setDefault(previous); }
+    }
     private static final class Request {
         final String line;
         final Map<String, String> headers;
@@ -169,6 +184,62 @@ public final class RelayClientTest {
         System.out.println("PASS HTTP JSON/chunked/gzip/errors/redirect/disconnect and HTTP proxy: one POST each");
     }
 
+    private static void automaticProxyCases() throws Exception {
+        // Android's system selector returns unresolved addresses, even for 127.0.0.1.
+        // The target deliberately cannot resolve: only the selected proxy may receive it.
+        for (String host : List.of("127.0.0.1", "localhost")) {
+            for (String method : List.of("GET", "POST")) {
+                try (LocalServer proxy = new LocalServer((socket, request) -> respond(socket, 200, "", "auto-proxy-ok".getBytes(StandardCharsets.UTF_8)));
+                     SelectedProxy selector = new SelectedProxy(new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved(host, proxy.server.getLocalPort())))) {
+                    String path = method.equals("GET") ? "/v1/models" : "/v1/images/generations";
+                    String url = "http://proxy-target.invalid" + path;
+                    RelayClient.Response result = CLIENT.request(url, method, method.equals("POST") ? BODY : null, "application/json", KEY, 10, "auto", false);
+                    check(result.status == 200 && result.text().equals("auto-proxy-ok"), "System unresolved " + host + " proxy must serve " + method);
+                    check(proxy.requests.size() == 1, "Automatic proxy must receive one " + method);
+                    check(proxy.requests.get(0).line.equals(method + " http://proxy-target.invalid:80" + path + " HTTP/1.1"), "Auto HTTP proxy receives the original remote hostname");
+                    if (method.equals("POST")) onePost(proxy);
+                    check(selector.selected.equals(List.of(new URI(url))), "Resolve the proxy once for the destination, never again for the proxy socket");
+                    check(selector.failures == 0, "A successful proxy does not trigger fallback");
+                }
+            }
+        }
+        try (LocalServer direct = new LocalServer((socket, request) -> respond(socket, 200, "", "direct-ok".getBytes(StandardCharsets.UTF_8)));
+             SelectedProxy selector = new SelectedProxy(new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved("invalid-proxy.invalid", 1)))) {
+            check(send(direct.origin() + "/v1/images/generations", "off").text().equals("direct-ok"), "Off connects directly despite a system proxy");
+            check(selector.selected.isEmpty(), "Off must not consult the system selector indirectly through Socket");
+            onePost(direct);
+        }
+        try (LocalServer direct = new LocalServer((socket, request) -> respond(socket, 200, "", new byte[0]));
+             LocalServer failingProxy = new LocalServer((socket, request) -> {});
+             SelectedProxy selector = new SelectedProxy(new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved("127.0.0.1", failingProxy.server.getLocalPort())), Proxy.NO_PROXY)) {
+            expectIOException(() -> send(direct.origin() + "/v1/images/generations", "auto"));
+            onePost(failingProxy);
+            check(direct.requests.isEmpty(), "A disconnected auto proxy must never cause a second generation through DIRECT");
+            check(selector.selected.size() == 1 && selector.failures == 0, "A submitted POST never reselects or retries the proxy");
+        }
+        System.out.println("PASS unresolved Android system HTTP proxy, GET models, POST once, off and no DIRECT fallback");
+    }
+
+    private static void proxyDiagnosticCases() throws Exception {
+        URI destination = new URI("https://proxy-target.invalid/v1/models");
+        Proxy systemProxy = new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved("127.0.0.1", 7890));
+        try (SelectedProxy selector = new SelectedProxy(systemProxy)) {
+            Proxy selected = RelayClient.chooseProxy(destination, "auto");
+            check(selected == systemProxy, "Diagnostics use the same system proxy choice as the transport");
+            check(RelayClient.proxyUrl(selected).equals("http://127.0.0.1:7890"), "Diagnostics display unresolved loopback proxy without resolving it");
+            check(selector.selected.equals(List.of(destination)), "Diagnostics use the provider URL for PAC and exclusions");
+        }
+        try (SelectedProxy selector = new SelectedProxy(Proxy.NO_PROXY, systemProxy)) {
+            Proxy selected = RelayClient.chooseProxy(destination, "auto");
+            check(selected == Proxy.NO_PROXY && RelayClient.proxyUrl(selected).isEmpty(), "System DIRECT decision must be respected, even when another proxy is listed");
+        }
+        try (SelectedProxy selector = new SelectedProxy(systemProxy)) {
+            Proxy selected = RelayClient.chooseProxy(destination, "off");
+            check(selected == Proxy.NO_PROXY && selector.selected.isEmpty(), "Off diagnostics do not call the system selector");
+        }
+        System.out.println("PASS proxy diagnostics use actual target-specific system choice");
+    }
+
     private static SSLContext testTls(Path dir) throws Exception {
         String exe = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win") ? "keytool.exe" : "keytool";
         Path keytool = Path.of(System.getProperty("java.home"), "bin", exe);
@@ -192,26 +263,29 @@ public final class RelayClientTest {
         try {
             SSLContext context = testTls(temp);
             SSLContext.setDefault(context); // Test-only trust; never changes app production code.
-            List<Request> tunneled = new CopyOnWriteArrayList<>();
-            try (LocalServer proxy = new LocalServer((socket, request) -> {
-                check(request.line.equals("CONNECT localhost:443 HTTP/1.1"), "Proxy tunnel target must match HTTPS origin");
-                check(!request.headers.containsKey("authorization"), "Provider API key must not be sent in CONNECT headers");
-                write(socket, "HTTP/1.1 200 Connection established\r\n\r\n");
-                try (SSLSocket secure = (SSLSocket) context.getSocketFactory().createSocket(socket, "localhost", 443, true)) {
-                    secure.setUseClientMode(false);
-                    secure.setSoTimeout(5000);
-                    secure.startHandshake();
-                    tunneled.add(readRequest(secure.getInputStream()));
-                    respond(secure, 200, "", "tls-proxy-ok".getBytes(StandardCharsets.UTF_8));
+            for (boolean automatic : List.of(false, true)) {
+                List<Request> tunneled = new CopyOnWriteArrayList<>();
+                try (LocalServer proxy = new LocalServer((socket, request) -> {
+                    check(request.line.equals("CONNECT localhost:443 HTTP/1.1"), "Proxy tunnel target must match HTTPS origin");
+                    check(!request.headers.containsKey("authorization"), "Provider API key must not be sent in CONNECT headers");
+                    write(socket, "HTTP/1.1 200 Connection established\r\n\r\n");
+                    try (SSLSocket secure = (SSLSocket) context.getSocketFactory().createSocket(socket, "localhost", 443, true)) {
+                        secure.setUseClientMode(false);
+                        secure.setSoTimeout(5000);
+                        secure.startHandshake();
+                        tunneled.add(readRequest(secure.getInputStream()));
+                        respond(secure, 200, "", "tls-proxy-ok".getBytes(StandardCharsets.UTF_8));
+                    }
+                }); SelectedProxy selector = new SelectedProxy(new Proxy(Proxy.Type.HTTP, InetSocketAddress.createUnresolved("127.0.0.1", proxy.server.getLocalPort())))) {
+                    RelayClient.Response result = send("https://localhost/v1/images/generations", automatic ? "auto" : proxy.origin());
+                    check(result.status == 200 && result.text().equals("tls-proxy-ok"), "HTTPS over CONNECT returns response");
+                    check(proxy.requests.size() == 1 && tunneled.size() == 1, "Exactly one CONNECT and one tunneled POST");
+                    check(tunneled.get(0).line.equals("POST /v1/images/generations HTTP/1.1"), "Tunneled request uses origin-form path");
+                    check(("Bearer " + KEY).equals(tunneled.get(0).headers.get("authorization")), "Fake API key travels only inside TLS");
+                    check(java.util.Arrays.equals(tunneled.get(0).body, BODY), "Tunneled POST body is unchanged");
+                    check(selector.selected.size() == (automatic ? 1 : 0), "CONNECT proxy selection happens only once in auto mode and never in manual mode");
                 }
-            })) {
-                RelayClient.Response result = send("https://localhost/v1/images/generations", proxy.origin());
-                check(result.status == 200 && result.text().equals("tls-proxy-ok"), "HTTPS over CONNECT returns response");
-                check(proxy.requests.size() == 1 && tunneled.size() == 1, "Exactly one CONNECT and one tunneled POST");
-                check(tunneled.get(0).line.equals("POST /v1/images/generations HTTP/1.1"), "Tunneled request uses origin-form path");
-                check(("Bearer " + KEY).equals(tunneled.get(0).headers.get("authorization")), "Fake API key travels only inside TLS");
-                check(java.util.Arrays.equals(tunneled.get(0).body, BODY), "Tunneled POST body is unchanged");
-            }
+                }
             try (LocalServer proxy = new LocalServer((socket, request) -> respond(socket, 407, "", "proxy authentication required".getBytes(StandardCharsets.UTF_8)))) {
                 expectIOException(() -> send("https://localhost/v1/images/generations", proxy.origin()));
                 check(proxy.requests.size() == 1 && proxy.requests.get(0).line.startsWith("CONNECT "), "Failed proxy handshake never falls back or submits a POST");
@@ -226,6 +300,8 @@ public final class RelayClientTest {
     }
 
     public static void main(String[] args) throws Exception {
+        automaticProxyCases();
+        proxyDiagnosticCases();
         httpCases();
         connectCases();
         System.out.println("All RelayClient socket checks passed (" + checks + " assertions, localhost and fake keys only)");

@@ -42,6 +42,8 @@ public final class MainActivity extends Activity {
     public static final String ORIGIN = "https://appassets.androidplatform.net";
     private static final int PICK_IMAGES = 101, SAVE_IMAGE = 102, PHOTO_ACCESS = 103;
     private WebView web;
+    private android.widget.FrameLayout webRoot;
+    private boolean lightTheme;
     private NativeApi api;
     private final ExecutorService workers = Executors.newFixedThreadPool(3);
     private final Set<String> seenRequests = Collections.synchronizedSet(new LinkedHashSet<>());
@@ -59,10 +61,11 @@ public final class MainActivity extends Activity {
         web = new WebView(this);
         web.setBackgroundColor(Color.rgb(25, 25, 25));
         web.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        android.widget.FrameLayout webRoot = new android.widget.FrameLayout(this);
+        webRoot = new android.widget.FrameLayout(this);
         webRoot.setBackgroundColor(Color.rgb(25, 25, 25));
         webRoot.addView(web, new android.widget.FrameLayout.LayoutParams(-1, -1));
         setContentView(webRoot);
+        applyTheme(getPreferences(MODE_PRIVATE).getBoolean("light-theme", false));
         // Android 15 enforces edge-to-edge for target 35; keep controls clear of system bars.
         if (Build.VERSION.SDK_INT >= 30) {
             getWindow().setDecorFitsSystemWindows(false);
@@ -181,13 +184,31 @@ public final class MainActivity extends Activity {
         return "image/png";
     }
     private void toast(String text) { runOnUiThread(() -> Toast.makeText(this, text, Toast.LENGTH_LONG).show()); }
+    private void applyTheme(boolean light) {
+        lightTheme = light;
+        int color = light ? Color.rgb(248, 249, 251) : Color.rgb(25, 25, 25);
+        web.setBackgroundColor(color);
+        webRoot.setBackgroundColor(color);
+        getWindow().setStatusBarColor(color);
+        getWindow().setNavigationBarColor(color);
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsetsController controller = getWindow().getInsetsController();
+            int flags = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            if (controller != null) controller.setSystemBarsAppearance(light ? flags : 0, flags);
+        } else {
+            View decor = getWindow().getDecorView();
+            int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            decor.setSystemUiVisibility(light ? decor.getSystemUiVisibility() | flags : decor.getSystemUiVisibility() & ~flags);
+        }
+    }
     private void completeFileSelection(Uri[] images) {
         ValueCallback<Uri[]> callback = fileCallback;
         fileCallback = null;
         if (callback != null) callback.onReceiveValue(images);
     }
     private void showPhotoPicker() {
-        photoPicker = new PhotoPickerDialog(this, pickerLimit, new PhotoPickerDialog.Listener() {
+        photoPicker = new PhotoPickerDialog(this, pickerLimit, lightTheme, new PhotoPickerDialog.Listener() {
             @Override public void onSelected(Uri[] images) { completeFileSelection(images); photoPicker = null; }
             @Override public void onFiles() { photoPicker = null; openImageFiles(); }
             @Override public void onRequestAccess() { requestPhotoAccess(); }
@@ -224,6 +245,15 @@ public final class MainActivity extends Activity {
         });
     }
     private final class Bridge {
+        @JavascriptInterface public void setTheme(String theme) {
+            if (!trustedPage || destroyed || !("light".equals(theme) || "dark".equals(theme))) return;
+            runOnUiThread(() -> {
+                if (!trustedPage || destroyed) return;
+                boolean light = "light".equals(theme);
+                applyTheme(light);
+                getPreferences(MODE_PRIVATE).edit().putBoolean("light-theme", light).apply();
+            });
+        }
         @JavascriptInterface public void setReferenceLimit(int remaining) {
             if (!trustedPage || destroyed) return;
             referenceLimit = Math.max(0, Math.min(10, remaining));

@@ -7,6 +7,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.ConnectException;
+import java.net.UnknownHostException;
 import java.net.Proxy;
 import java.net.ProxySelector;
 import java.net.Socket;
@@ -60,17 +62,30 @@ public final class RelayClient {
         int port = uri.getPort() == -1 ? (tls ? 443 : 80) : uri.getPort();
         int timeout = Math.max(10, Math.min(3600, timeoutSeconds)) * 1000;
         Proxy proxy = chooseProxy(uri, proxySetting);
-        Socket raw = proxy.type() == Proxy.Type.SOCKS ? new Socket(proxy) : new Socket();
+        // Resolve the route once. A plain Socket may consult the default selector again.
+        Socket raw = new Socket(proxy.type() == Proxy.Type.SOCKS ? proxy : Proxy.NO_PROXY);
         AtomicReference<Socket> active = new AtomicReference<>(raw);
         ScheduledFuture<?> watchdog = DEADLINES.schedule(() -> { try { active.get().close(); } catch (Exception ignored) {} }, timeout, TimeUnit.MILLISECONDS);
         long start = System.currentTimeMillis();
+        boolean requestStarted = false;
+        String stage = "连接";
         try {
             raw.setSoTimeout(timeout);
             raw.setTcpNoDelay(true);
             boolean httpProxy = proxy.type() == Proxy.Type.HTTP;
-            raw.connect(httpProxy ? proxy.address() : new InetSocketAddress(host, port), Math.min(timeout, 30000));
+            // Android's ProxySelector commonly returns an unresolved address, even
+            // for 127.0.0.1. Socket.connect rejects it without trying to resolve it.
+            InetSocketAddress destination;
+            if (httpProxy) {
+                InetSocketAddress address = (InetSocketAddress) proxy.address();
+                destination = address.isUnresolved()
+                    ? new InetSocketAddress(address.getHostString(), address.getPort()) : address;
+            } else destination = proxy.type() == Proxy.Type.SOCKS
+                ? InetSocketAddress.createUnresolved(host, port) : new InetSocketAddress(host, port);
+            raw.connect(destination, Math.min(timeout, 30000));
             String authority = (host.contains(":") && !host.startsWith("[") ? "[" + host + "]" : host) + ":" + port;
             if (httpProxy && tls) {
+                stage = "建立代理隧道";
                 OutputStream tunnel = raw.getOutputStream();
                 tunnel.write(("CONNECT " + authority + " HTTP/1.1\r\nHost: " + authority + "\r\nProxy-Connection: keep-alive\r\n\r\n").getBytes(StandardCharsets.ISO_8859_1));
                 tunnel.flush();
@@ -79,6 +94,7 @@ public final class RelayClient {
             }
             Socket socket = raw;
             if (tls) {
+                stage = "建立安全连接";
                 SSLSocket secure = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, host, port, true);
                 active.set(secure);
                 SSLParameters params = secure.getSSLParameters();
@@ -98,6 +114,7 @@ public final class RelayClient {
             if (body != null) header.append("Content-Type: ").append(contentType).append("\r\nContent-Length: ").append(body.length).append("\r\n");
             header.append("\r\n");
             OutputStream output = socket.getOutputStream();
+            requestStarted = true;
             output.write(header.toString().getBytes(StandardCharsets.UTF_8));
             if (body != null) output.write(body);
             output.flush(); // This is the only upstream application request write.
@@ -119,6 +136,16 @@ public final class RelayClient {
             }
             return new Response(head.status, head.headers, bytes); // 3xx is returned to caller; never followed.
         } catch (IOException e) {
+            if (!requestStarted) {
+                String route = proxy.type() == Proxy.Type.DIRECT ? "服务器 " + host : "代理 " + proxyUrl(proxy);
+                String reason = e instanceof UnknownHostException ? "无法解析地址"
+                    : e instanceof ConnectException ? proxy.type() == Proxy.Type.DIRECT
+                        ? "无法连接，请检查供应商地址、网络及 VPN 应用分流设置"
+                        : "无法连接，请检查代理是否运行、端口是否正确及应用分流设置"
+                    : e instanceof SocketTimeoutException ? "连接超时"
+                    : e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+                throw new IOException(stage + "失败（" + route + "）：" + reason + "。尚未发送接口请求。", e);
+            }
             if (System.currentTimeMillis() - start >= timeout - 100 || e instanceof SocketTimeoutException)
                 throw new IOException("等待上游响应超时。请求可能已被处理，请先查看供应商记录；本工具没有自动重发。", e);
             throw e;
@@ -128,7 +155,7 @@ public final class RelayClient {
             try { raw.close(); } catch (Exception ignored) {}
         }
     }
-    private static Proxy chooseProxy(URI target, String setting) throws Exception {
+    public static Proxy chooseProxy(URI target, String setting) throws Exception {
         String value = setting == null ? "auto" : setting.trim();
         if (value.isEmpty() || value.equalsIgnoreCase("off") || value.equalsIgnoreCase("direct")) return Proxy.NO_PROXY;
         if (value.equalsIgnoreCase("auto")) {
@@ -143,6 +170,13 @@ public final class RelayClient {
         if (!"http".equalsIgnoreCase(proxy.getScheme()) || proxy.getHost() == null || proxy.getUserInfo() != null)
             throw new IOException("安卓代理支持 auto、off 或 http://主机:端口");
         return new Proxy(Proxy.Type.HTTP, new InetSocketAddress(proxy.getHost(), proxy.getPort() < 0 ? 80 : proxy.getPort()));
+    }
+    public static String proxyUrl(Proxy proxy) {
+        if (proxy == null || proxy.type() == Proxy.Type.DIRECT) return "";
+        InetSocketAddress address = (InetSocketAddress) proxy.address();
+        String host = address.getHostString();
+        if (host.contains(":") && !host.startsWith("[")) host = "[" + host + "]";
+        return (proxy.type() == Proxy.Type.SOCKS ? "socks5://" : "http://") + host + ":" + address.getPort();
     }
     public static boolean isPrivateHost(String host) {
         String h = host.toLowerCase(Locale.ROOT).replace("[", "").replace("]", "");

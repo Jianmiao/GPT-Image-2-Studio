@@ -1,6 +1,6 @@
 {
   "name": "gpt-image-2-relay-studio",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "通过第三方中转站（OpenAI 兼容网关）使用 GPT Image 2 生图 / 改图的本地工具，自动获取可用模型",
   "main": "server/cli.js",

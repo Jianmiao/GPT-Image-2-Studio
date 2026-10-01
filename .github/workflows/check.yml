@@ -19,6 +19,10 @@ jobs:
           node-version: 24
       - name: Run local mock tests
         run: npm test
+      - name: Check settings layout and appearance
+        run: node test/settings-layout.js
+        env:
+          UI_SCREENSHOTS: '0'
       - name: Check desktop and mobile interface
         run: node test/chat-ui-e2e.js
         env:

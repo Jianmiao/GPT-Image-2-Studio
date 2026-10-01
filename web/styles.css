@@ -357,3 +357,162 @@ select[size] option { padding: 8px; }
     max-height: min(var(--tool-panel-max-height, 460px), calc(100dvh - 24px)) !important;
   }
 }
+
+/* Settings keep a real scrolling body between the visible heading/footer. */
+.settings-card .modal-content { flex: 1 1 auto; min-height: 0; overflow-y: auto; scroll-padding: 12px; }
+.settings-card .modal-header, .settings-card .modal-footer { flex: 0 0 auto; }
+.settings-card .adv { display: block; overflow: visible; }
+.settings-card .adv > summary { scroll-margin-top: 12px; }
+.appearance-settings .field { margin-bottom: 0; }
+
+/* Light appearance uses the same layout and contrast hierarchy as dark mode. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --canvas: #f7f8fa;
+  --sidebar: #f0f2f5;
+  --surface: #ffffff;
+  --line: #d8dce3;
+  --text: #202631;
+  --text-dim: #556174;
+  --text-faint: #707d8f;
+  --accent: #315f9b;
+  --danger: #aa3636;
+  --ok: #267346;
+}
+:root[data-theme="light"] .sidebar { border-color: var(--line); }
+:root[data-theme="light"] .brand-mark { color: #52657c; }
+:root[data-theme="light"] .brand-mark svg path:last-child { fill: #6884a7; }
+:root[data-theme="light"] .brand-version { color: var(--text-dim); border-color: var(--line); }
+:root[data-theme="light"] .new-chat,
+:root[data-theme="light"] .composer,
+:root[data-theme="light"] .modal-card,
+:root[data-theme="light"] .tool-panel,
+:root[data-theme="light"] .history-menu-panel,
+:root[data-theme="light"] .inspiration-chip {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--line);
+}
+:root[data-theme="light"] .composer:focus-within { border-color: #7a98be; }
+:root[data-theme="light"] .history-menu-panel,
+:root[data-theme="light"] .tool-panel { box-shadow: 0 14px 45px #23365324; }
+:root[data-theme="light"] .modal-card { box-shadow: 0 24px 80px #172d4938; }
+:root[data-theme="light"] .new-chat:hover,
+:root[data-theme="light"] .inspiration-chip:hover,
+:root[data-theme="light"] .icon-button:hover,
+:root[data-theme="light"] .settings-entry:hover,
+:root[data-theme="light"] .history-search:focus-within,
+:root[data-theme="light"] .history-row:hover,
+:root[data-theme="light"] .history-row.is-active,
+:root[data-theme="light"] .history-item.is-active,
+:root[data-theme="light"] .history-menu-panel button:hover,
+:root[data-theme="light"] .choice-item:hover { background: #e8edf4; color: var(--text); }
+:root[data-theme="light"] .history-item,
+:root[data-theme="light"] .history-search input,
+:root[data-theme="light"] .history-menu-panel button,
+:root[data-theme="light"] .settings-entry,
+:root[data-theme="light"] .prompt-wrap textarea { color: var(--text); }
+:root[data-theme="light"] .header-start #chatTitle,
+:root[data-theme="light"] .icon-button,
+:root[data-theme="light"] .label,
+:root[data-theme="light"] .switch-row,
+:root[data-theme="light"] .adv > summary,
+:root[data-theme="light"] .choice-item,
+:root[data-theme="light"] .inspiration-chip span,
+:root[data-theme="light"] .inspiration-chip .icon { color: var(--text-dim); }
+:root[data-theme="light"] .hint,
+:root[data-theme="light"] .counter,
+:root[data-theme="light"] .composer-caption,
+:root[data-theme="light"] .stage-sub,
+:root[data-theme="light"] .history-heading,
+:root[data-theme="light"] .history-meta,
+:root[data-theme="light"] .archive-empty,
+:root[data-theme="light"] .settings-entry small,
+:root[data-theme="light"] .status-pill,
+:root[data-theme="light"] .inspiration-chip small,
+:root[data-theme="light"] .choice-item small,
+:root[data-theme="light"] .choice-item > span,
+:root[data-theme="light"] .modal-header p,
+:root[data-theme="light"] .modal-footer > span,
+:root[data-theme="light"] .endpoint-chip,
+:root[data-theme="light"] .row-endpoints,
+:root[data-theme="light"] .row-endpoints b { color: var(--text-faint); }
+:root[data-theme="light"] .prompt-wrap textarea::placeholder,
+:root[data-theme="light"] input::placeholder { color: #7c8796; }
+:root[data-theme="light"] .settings-icon,
+:root[data-theme="light"] .history-thumb,
+:root[data-theme="light"] .upload-button,
+:root[data-theme="light"] .btn,
+:root[data-theme="light"] .mini,
+:root[data-theme="light"] .chip,
+:root[data-theme="light"] .tool-menu > summary,
+:root[data-theme="light"] .lb-close {
+  color: var(--text-dim);
+  background: #edf1f6;
+  border-color: var(--line);
+}
+:root[data-theme="light"] .btn:hover,
+:root[data-theme="light"] .mini:hover,
+:root[data-theme="light"] .chip:hover,
+:root[data-theme="light"] .upload-button:hover,
+:root[data-theme="light"] .tool-menu > summary:hover,
+:root[data-theme="light"] .tool-menu[open] > summary { background: #e0e7f0; color: var(--text); }
+:root[data-theme="light"] .btn.ghost { background: transparent; }
+:root[data-theme="light"] .btn.primary { background: #315f9b; color: #fff; border-color: transparent; }
+:root[data-theme="light"] .btn.primary:hover { background: #264e83; }
+:root[data-theme="light"] .send-button.btn { background: #263a54; color: #fff; }
+:root[data-theme="light"] .btn-spin { border-color: #ffffff55; border-top-color: #fff; }
+:root[data-theme="light"] .image-mode-badge,
+:root[data-theme="light"] .choice-item.is-active,
+:root[data-theme="light"] .chip.is-active,
+:root[data-theme="light"] .mini[data-on="1"] { background: #e4edf9; color: #315f9b; border-color: #9ab4d6; }
+:root[data-theme="light"] input[type="text"],
+:root[data-theme="light"] input[type="password"],
+:root[data-theme="light"] input[type="number"],
+:root[data-theme="light"] select { background: #fff; color: var(--text); border-color: #cbd2dc; }
+:root[data-theme="light"] select[size] option:checked { background: #dce8f8; color: #264e83; }
+:root[data-theme="light"] .sidebar-footer,
+:root[data-theme="light"] .settings-section,
+:root[data-theme="light"] .modal-header,
+:root[data-theme="light"] .modal-footer,
+:root[data-theme="light"] .refs,
+:root[data-theme="light"] .prompt-management,
+:root[data-theme="light"] .help-note { border-color: var(--line); }
+:root[data-theme="light"] .drop { color: var(--text-faint); border-color: #bdc8d7; }
+:root[data-theme="light"] .drop.is-over { color: #315f9b; background: #e4edf9; }
+:root[data-theme="light"] .user-message { background: #e5ecf5; color: var(--text); }
+:root[data-theme="light"] .user-meta { color: var(--text-faint); }
+:root[data-theme="light"] .result-card { background: #fff; border-color: var(--line); }
+:root[data-theme="light"] .result-media { background: #f0f3f7; }
+:root[data-theme="light"] .result-prompt { color: var(--text); }
+:root[data-theme="light"] .tag { background: #edf0f5; color: var(--text-dim); }
+:root[data-theme="light"] .tag.hl { background: #e4edf9; color: #315f9b; }
+:root[data-theme="light"] .tag.warn { background: #f5eddb; color: #7d622d; }
+:root[data-theme="light"] .progress { background: #edf3fb; border-color: #b4c8e3; }
+:root[data-theme="light"] .progress-head { color: #315f9b; }
+:root[data-theme="light"] .progress-log,
+:root[data-theme="light"] .progress-log b,
+:root[data-theme="light"] .elapsed { color: #577192; }
+:root[data-theme="light"] .progress-bar { background: #d3e0f0; }
+:root[data-theme="light"] .error-card { background: #fff1f1; border-color: #e7b9b9; }
+:root[data-theme="light"] .error-card p { color: #854545; }
+:root[data-theme="light"] .error-card pre { background: #f5e6e6; color: #804d4d; }
+:root[data-theme="light"] .help-steps strong,
+:root[data-theme="light"] .help-note h3,
+:root[data-theme="light"] .settings-section h3 { color: var(--text); }
+:root[data-theme="light"] .help-steps p,
+:root[data-theme="light"] .help-note p { color: var(--text-dim); }
+:root[data-theme="light"] .modal { background: #1d2c4561; }
+:root[data-theme="light"] .lightbox { background: #f7f8faf5; }
+:root[data-theme="light"] .lb-meta { color: var(--text-dim); }
+:root[data-theme="light"] .toast { background: #fff; color: var(--text); border-color: #bcc9da; box-shadow: 0 10px 30px #23365324; }
+:root[data-theme="light"] .toast.err { border-color: #c88b8b; }
+:root[data-theme="light"] .toast.ok { border-color: #89b39a; }
+:root[data-theme="light"] .toast.warn { border-color: #c1ab74; }
+:root[data-theme="light"] .hint.is-error,
+:root[data-theme="light"] .status-pill[data-state="error"],
+:root[data-theme="light"] .history-menu-panel .danger { color: var(--danger); }
+:root[data-theme="light"] .hint.is-ok { color: var(--ok); }
+:root[data-theme="light"] code { background: #e9edf3; color: #445973; }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background: #bcc5d2; }
+:root[data-theme="light"] ::selection { background: #bfd4f1; color: #182d48; }

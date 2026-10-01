@@ -601,7 +601,8 @@ async function fetchModels({ silent = false } = {}) {
     } else {
       setStatus('模型列表接口不可用', 'error');
       el.modelHint.className = 'hint is-error';
-      const via = r.proxy && r.proxy.url ? `出口 ${r.proxy.url}（${r.proxy.source}）` : '出口 直连';
+      const via = r.proxy && r.proxy.description ? r.proxy.description
+        : r.proxy && r.proxy.url ? `出口 ${r.proxy.url}（${r.proxy.source}）` : '出口 直连';
       el.modelHint.textContent = '自动获取失败：' + r.error + '｜' + via + (r.advice ? '｜' + r.advice : '');
       setSettingsFeedback(el.modelHint.textContent);
       if (!silent) toast('自动获取模型失败：' + r.error, 'err', 7000);
@@ -1211,16 +1212,17 @@ function bind() {
         body: JSON.stringify({ baseUrl: el.baseUrl.value.trim(), proxy: el.proxy.value.trim() || 'auto' })
       });
       if (r.proxy) {
-        const used = r.proxy.url ? `${r.proxy.url}（来源：${r.proxy.source}）` : '未检测到代理，将直连';
-        el.proxyHint.className = 'hint is-ok';
-        el.proxyHint.textContent = '当前出口：' + used;
-        toast('代理探测：' + used, 'ok', 4000);
-        if (!r.proxy.url) toast('没探测到系统代理。若浏览器能打开站点，请手动填代理地址（如 http://127.0.0.1:7890）', 'warn', 7000);
+        const used = r.proxy.description || (r.proxy.url ? `${r.proxy.url}（来源：${r.proxy.source}）` : '未检测到 HTTP 代理，使用系统网络');
+        el.proxyHint.className = 'hint';
+        el.proxyHint.textContent = '网络配置：' + used + (r.proxy.advice ? '。' + r.proxy.advice : '。是否连通请点“连通性检测”。');
+        toast('网络配置：' + used, '', 5000);
       } else {
         el.proxyHint.className = 'hint is-error';
         el.proxyHint.textContent = '探测失败：' + (r.error || '未知错误');
       }
     } catch (e) {
+      el.proxyHint.className = 'hint is-error';
+      el.proxyHint.textContent = '探测失败：' + e.message;
       toast('探测失败：' + e.message, 'err');
     } finally {
       el.btnProbeProxy.disabled = false;
@@ -1342,7 +1344,7 @@ async function boot() {
 
   if (window.NativeBridge) {
     el.streamUpstream.closest('label').querySelector('.hint').textContent = '支持接收流式结果；安卓版会在响应完成后显示图片，暂不逐帧预览。';
-    el.proxyHint.textContent = 'auto 使用手机的系统网络 / VPN，off 直连。手动代理地址应能从手机访问。';
+    el.proxyHint.textContent = 'auto 使用系统代理或 VPN；off 只关闭 HTTP 代理，仍遵循系统 VPN。仅开启本地代理端口时，请填写手机上的 HTTP 代理地址。';
     el.helpModal.querySelectorAll('p').forEach((p) => {
       if (p.textContent.includes('.gptimage2/gallery/')) {
         p.textContent = '图片与提示词历史保存在应用私有目录；点下载可导出图片。手机与电脑版数据分别保存。';

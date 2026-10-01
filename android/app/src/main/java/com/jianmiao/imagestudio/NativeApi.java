@@ -3,6 +3,8 @@ package com.jianmiao.imagestudio;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.util.AtomicFile;
 import android.util.Base64;
 import org.json.JSONArray;
@@ -36,6 +38,7 @@ import java.util.regex.Pattern;
 /** Native equivalents of the desktop API. All network calls run off the UI thread. */
 public final class NativeApi {
     private final SharedPreferences prefs;
+    private final ConnectivityManager connectivity;
     private final File gallery;
     private final AtomicFile history;
     private final Object historyLock = new Object();
@@ -49,6 +52,7 @@ public final class NativeApi {
     private static final Pattern IMAGE_MODEL = Pattern.compile("gpt.?image|dall.?e|image|flux|seedream|nano.?banana|ideogram|recraft|stable.?diffusion", Pattern.CASE_INSENSITIVE);
 
     public NativeApi(Context context) {
+        connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         prefs = context.getSharedPreferences("image-studio-private", Context.MODE_PRIVATE);
         gallery = new File(context.getFilesDir(), "gallery");
         if (!gallery.exists()) gallery.mkdirs();
@@ -89,7 +93,7 @@ public final class NativeApi {
             if (!path.startsWith("/api/") || uri.getHost() != null) return new Result(403, object("error", "拒绝非本地 API 请求"));
             String route = method + " " + uri.getPath();
             switch (route) {
-                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.1"));
+                case "GET /api/health": return new Result(200, object("ok", true, "platform", "android", "version", "1.2.2"));
                 case "GET /api/config": return new Result(200, publicConfig(config()));
                 case "POST /api/config": return new Result(200, saveConfig(input));
                 case "POST /api/endpoints": return new Result(200, endpoints(merged(input)));
@@ -172,15 +176,36 @@ public final class NativeApi {
     }
     private JSONObject endpoints(JSONObject cfg) throws Exception {
         String base = normalizeBase(cfg.optString("baseUrl", ""));
-        String proxy = cfg.optString("proxy", "auto");
         return object("base", base, "models", base + "/v1/models", "generations", base + "/v1/images/generations", "edits", base + "/v1/images/edits",
             "responses", base + "/v1/responses", "chat", base + "/v1/chat/completions",
-            "proxy", object("url", proxy.startsWith("http://") ? proxy : "", "source", proxy.equals("auto") ? "Android 系统网络 / VPN" : "手动设置"));
+            "proxy", proxyInfo(cfg, base + "/v1/models"));
+    }
+    private JSONObject proxyInfo(JSONObject cfg, String target) throws Exception {
+        String setting = cfg.optString("proxy", "auto").trim();
+        // Diagnostics and transport use the same target-aware selector, including PAC exclusions.
+        String url = RelayClient.proxyUrl(RelayClient.chooseProxy(new URI(target), setting));
+        boolean vpn = false;
+        try {
+            NetworkCapabilities capabilities = connectivity == null ? null
+                : connectivity.getNetworkCapabilities(connectivity.getActiveNetwork());
+            vpn = capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN);
+        } catch (SecurityException ignored) { /* Network routing still works without diagnostics. */ }
+        boolean auto = setting.equalsIgnoreCase("auto");
+        String source = url.isEmpty() ? "Android 系统网络" : auto ? "Android 系统代理" : "手动设置";
+        String description = !url.isEmpty() ? url + "（" + source + "）"
+            : vpn ? "已检测到本应用的 VPN 网络，出口由 VPN 规则决定"
+            : "使用 Android 系统网络；未检测到 HTTP 代理或本应用的 VPN";
+        String advice = url.isEmpty()
+            ? "若使用 Nano 等代理软件，请开启 VPN 模式，并在应用分流中包含 GPT Image 2；仅开启本地代理端口时，请手动填写手机上的 HTTP 代理地址。off 只关闭 HTTP 代理，不会绕过系统 VPN。"
+            : "已识别代理配置；是否连通请点“连通性检测”。连接失败时请检查代理端口和应用分流设置。";
+        return object("url", url, "source", source, "mode", url.isEmpty() ? vpn ? "vpn" : "system" : "proxy",
+            "vpn", vpn, "description", description, "advice", advice);
     }
     private JSONObject models(JSONObject cfg) throws Exception {
         String base = normalizeBase(cfg.optString("baseUrl", "")), key = cfg.optString("apiKey", "").trim();
         if (key.isEmpty()) throw new IllegalArgumentException("请先填写 API Key");
         String url = base + "/v1/models";
+        JSONObject proxy = proxyInfo(cfg, url);
         try {
             RelayClient.Response res = relay.request(url, "GET", null, null, key, 30, cfg.optString("proxy", "auto"), cfg.optBoolean("allowPrivateHost", true));
             checkResponse(res);
@@ -204,17 +229,20 @@ public final class NativeApi {
             }
             Comparator<String> sort = Comparator.comparingInt(NativeApi::modelRank).thenComparing(String::compareToIgnoreCase);
             Collections.sort(ids, sort); Collections.sort(images, sort);
-            return object("ok", true, "source", "api", "url", url, "total", ids.size(), "models", new JSONArray(ids), "imageModels", new JSONArray(images));
+            return object("ok", true, "source", "api", "url", url, "proxy", proxy, "total", ids.size(), "models", new JSONArray(ids), "imageModels", new JSONArray(images));
         } catch (Exception e) {
-            return object("ok", false, "source", "builtin", "url", url, "error", e.getMessage(), "advice", "可手动填写供应商支持的模型名称。", "total", BUILTIN.length,
+            return object("ok", false, "source", "builtin", "url", url, "proxy", proxy, "error", e.getMessage(), "advice", e instanceof ApiFailure ? "可手动填写供应商支持的模型名称。" : proxy.optString("advice"), "total", BUILTIN.length,
                 "models", new JSONArray(java.util.Arrays.asList(BUILTIN)), "imageModels", new JSONArray(java.util.Arrays.asList(BUILTIN)));
         }
     }
     private static int modelRank(String id) { String s = id.toLowerCase(Locale.ROOT); return s.startsWith("gpt-image-2") ? 0 : s.startsWith("gpt-image") ? 1 : IMAGE_MODEL.matcher(s).find() ? 2 : 3; }
     private JSONObject testConnection(JSONObject cfg) throws Exception {
         JSONObject result = models(cfg);
+        JSONObject proxy = result.optJSONObject("proxy");
         return object("ok", result.optBoolean("ok"), "steps", new JSONArray().put(object("ok", result.optBoolean("ok"), "name", "GET /v1/models",
-            "detail", result.optBoolean("ok") ? "已连接，找到 " + result.optInt("total") + " 个模型（未发送生图请求）" : result.optString("error"))),
+            "detail", (result.optBoolean("ok") ? "已连接，找到 " + result.optInt("total") + " 个模型（未发送生图请求）" : result.optString("error"))
+                + (proxy == null ? "" : "\n网络：" + proxy.optString("description"))
+                + (result.optBoolean("ok") ? "" : "\n" + result.optString("advice")))), "proxy", proxy,
             "imageModels", result.optBoolean("ok") ? result.optJSONArray("imageModels") : new JSONArray());
     }
     private static void checkResponse(RelayClient.Response res) throws ApiFailure {
