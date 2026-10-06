@@ -10,6 +10,8 @@ const path = require('path');
 const suites = [
   ['前端一致性', 'ui-static-check.js'],
   ['Android 桥接', 'android-bridge.js'],
+  ['主题持久化', 'theme-persistence.js'],
+  ['主题本地保存', 'appearance-store.js'],
   ['尺寸格式兼容', 'size-notation.js'],
   ['网关异常归因', 'gateway-errors.js'],
   ['代理响应形状', 'proxy-shapes.js'],

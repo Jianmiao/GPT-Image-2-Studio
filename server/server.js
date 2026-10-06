@@ -731,6 +731,11 @@ async function proxyDownload(req, res, query) {
 
 const routes = {
   'GET /api/health': async (req, res) => sendJson(res, 200, { ok: true, version: PKG.version, node: process.version, uptime: Math.round(process.uptime()) }),
+  'GET /api/appearance': async (req, res) => sendJson(res, 200, store.getAppearance()),
+  'POST /api/appearance': async (req, res) => {
+    const body = await readJsonBody(req);
+    sendJson(res, 200, store.saveAppearance(body && body.themePreference));
+  },
   'GET /api/config': async (req, res) => sendJson(res, 200, store.publicConfig()),
   'POST /api/config': async (req, res) => {
     const body = await readJsonBody(req);

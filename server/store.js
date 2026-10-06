@@ -12,6 +12,7 @@ const ROOT = process.env.GPTIMAGE2_DATA_DIR
   : path.join(__dirname, '..', '.gptimage2');
 const CONFIG_FILE = path.join(ROOT, 'config.json');
 const HISTORY_FILE = path.join(ROOT, 'history.json');
+const APPEARANCE_FILE = path.join(ROOT, 'appearance.json');
 const GALLERY_DIR = path.join(ROOT, 'gallery');
 
 const DEFAULT_CONFIG = {
@@ -92,6 +93,20 @@ function publicConfig() {
   });
 }
 
+/* Theme belongs to this installation, so changing browser origin/cache cannot lose it. */
+const THEMES = new Set(['dark', 'light', 'system']);
+function getAppearance() {
+  const saved = readJson(APPEARANCE_FILE, null);
+  return { themePreference: saved && THEMES.has(saved.themePreference) ? saved.themePreference : null };
+}
+
+function saveAppearance(themePreference) {
+  if (!THEMES.has(themePreference)) throw new Error('显示模式只能为深色、浅色或跟随系统');
+  const saved = { themePreference };
+  writeJson(APPEARANCE_FILE, saved);
+  return saved;
+}
+
 /* ------------------------------- history ------------------------------ */
 
 const HISTORY_LIMIT = 300;
@@ -141,6 +156,7 @@ function galleryPath(name) {
 module.exports = {
   ROOT, GALLERY_DIR, DEFAULT_CONFIG,
   getConfig, saveConfig, publicConfig, maskKey,
+  getAppearance, saveAppearance,
   getHistory, addHistory, removeHistory, clearHistory,
   saveImage, galleryPath,
   ensureDir

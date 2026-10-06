@@ -23,6 +23,8 @@ jobs:
         run: node test/settings-layout.js
         env:
           UI_SCREENSHOTS: '0'
+      - name: Check appearance after clearing browser storage
+        run: node test/theme-browser.js
       - name: Check desktop and mobile interface
         run: node test/chat-ui-e2e.js
         env:
