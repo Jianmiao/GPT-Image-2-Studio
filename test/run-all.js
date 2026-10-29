@@ -13,11 +13,13 @@ const suites = [
   ['主题持久化', 'theme-persistence.js'],
   ['主题本地保存', 'appearance-store.js'],
   ['尺寸格式兼容', 'size-notation.js'],
+  ['审核参数传递', 'moderation.js'],
   ['网关异常归因', 'gateway-errors.js'],
   ['代理响应形状', 'proxy-shapes.js'],
   ['网络层端到端', 'net-e2e.js'],
   ['图片二进制传输', 'net-binary.js'],
   ['电脑图片自动保存', 'desktop-gallery.js'],
+  ['原图手动下载', 'download.js'],
   ['全链路冒烟', 'smoke.js']
 ];
 

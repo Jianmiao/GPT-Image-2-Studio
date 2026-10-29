@@ -135,7 +135,7 @@ public final class NativeApi {
     private synchronized JSONObject config() {
         JSONObject out = object("providerName", "", "baseUrl", "https://api.openai.com", "apiKey", "", "model", "gpt-image-2", "size", "1024x1024",
             "quality", "high", "background", "auto", "outputFormat", "auto", "count", 1, "method", "auto", "editEndpoint", "auto",
-            "timeoutSeconds", 600, "moderation", "auto", "streamUpstream", false, "proxy", "auto", "allowPrivateHost", true);
+            "timeoutSeconds", 600, "moderation", "low", "streamUpstream", false, "proxy", "auto", "allowPrivateHost", true);
         try { merge(out, new JSONObject(prefs.getString("config", "{}"))); } catch (Exception ignored) {}
         return out;
     }
@@ -280,8 +280,11 @@ public final class NativeApi {
         JSONObject body; String endpoint, label = method, contentType = "application/json"; byte[] bytes;
         if (method.equals("images")) {
             body = object("model", model, "prompt", prompt, "n", count, "size", size);
-            option(body, cfg, "quality", "quality"); option(body, cfg, "background", "background"); option(body, cfg, "moderation", "moderation");
-            if (model.toLowerCase(Locale.ROOT).startsWith("gpt-image")) option(body, cfg, "outputFormat", "output_format");
+            option(body, cfg, "quality", "quality"); option(body, cfg, "background", "background");
+            if (model.toLowerCase(Locale.ROOT).startsWith("gpt-image")) {
+                if (cfg.optString("moderation").equals("low")) body.put("moderation", "low");
+                option(body, cfg, "outputFormat", "output_format");
+            }
             if (stream) body.put("stream", true);
             endpoint = refs.length() > 0 ? "images/edits" : "images/generations";
             label = endpoint;
@@ -302,6 +305,7 @@ public final class NativeApi {
             JSONObject tool = object("type", "image_generation");
             if (!size.equals("auto")) tool.put("size", size);
             option(tool, cfg, "quality", "quality"); option(tool, cfg, "background", "background"); option(tool, cfg, "outputFormat", "output_format");
+            if (cfg.optString("moderation").equals("low")) tool.put("moderation", "low");
             body = object("model", model, "input", prompt, "tools", new JSONArray().put(tool), "stream", stream);
             if (refs.length() > 0) {
                 JSONArray content = new JSONArray().put(object("type", "input_text", "text", prompt));

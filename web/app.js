@@ -74,6 +74,7 @@ const state = {
   settingsModelsSnapshot: null,
   settingsSaving: false,
   settingsPending: new Set(),
+  activeDownloads: new Set(),
   modalFocus: null,
   modelsProvider: '',
   modelRequestVersion: 0,
@@ -895,7 +896,9 @@ function finishCard(item) {
     return b;
   };
   item.images.forEach((img, i) => {
-    actions.appendChild(mkBtn('下载 #' + (i + 1), () => downloadImage(img, item, i)));
+    const button = mkBtn('下载 #' + (i + 1), () => downloadImage(img, item, i));
+    button.dataset.downloadKey = downloadKey(item, i);
+    actions.appendChild(button);
   });
   actions.appendChild(mkBtn('复制提示词', () => copyText(item.prompt)));
   actions.appendChild(mkBtn('复用参数', () => reuseItem(item)));
@@ -917,6 +920,12 @@ function finishCard(item) {
     note.textContent = localFeedback.message;
     body.append(note);
   }
+  const downloadFeedback = document.createElement('p');
+  downloadFeedback.className = 'download-feedback';
+  downloadFeedback.dataset.downloadFeedback = '';
+  downloadFeedback.dataset.state = 'warn';
+  downloadFeedback.hidden = true;
+  body.append(downloadFeedback);
   body.append(actions);
   card.append(media, body);
   el.results.appendChild(card);
@@ -1114,22 +1123,118 @@ async function generate() {
 
 /* ───────────────────────────── 下载 ───────────────────────────── */
 
-function downloadImage(img, item, index) {
+function downloadKey(item, index) { return String(item.id || 'result') + ':' + index; }
+
+function setDownloadBusy(item, index, busy) {
+  const key = downloadKey(item, index);
+  if (busy) state.activeDownloads.add(key);
+  else state.activeDownloads.delete(key);
+  el.results.querySelectorAll('[data-download-key]').forEach((button) => {
+    if (button.dataset.downloadKey === key) button.disabled = busy;
+  });
+  if (el.lbDownload.dataset.downloadKey === key) el.lbDownload.disabled = busy;
+}
+
+function setDownloadFeedback(item, index, message = '', originalUrl = '') {
+  const card = [...el.results.querySelectorAll('.result-card')].find((node) => node.dataset.id === String(item.id));
+  const note = card && card.querySelector('[data-download-feedback]');
+  if (!note) return;
+  note.replaceChildren();
+  note.hidden = !message;
+  if (!message) return;
+  note.dataset.state = message.startsWith('下载失败：') ? 'warn' : 'info';
+  note.appendChild(document.createTextNode(message));
+  if (originalUrl) {
+    const link = document.createElement('a');
+    link.href = originalUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.dataset.originalImage = '';
+    link.textContent = '打开原图';
+    link.style.marginLeft = '0.6em';
+    note.appendChild(link);
+  }
+}
+
+function clickDownload(href, name) {
+  const anchor = document.createElement('a');
+  anchor.href = href;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function validateDownloadBlob(blob, contentType) {
+  if (!blob.size) throw new Error('服务器返回的图片文件为空。');
+  const mime = String(contentType || blob.type || '').split(';')[0].trim().toLowerCase();
+  if (!/^image\/(png|jpeg|webp|gif|avif|bmp)$/.test(mime)) {
+    throw new Error('服务器返回内容不是受支持的图片格式。');
+  }
+  return blob;
+}
+
+async function downloadImage(img, item, index) {
+  if (!img || !img.url) { toast('图片地址无效，请重新打开该记录。', 'err', 7000); return; }
   const name = `${fileStamp()}-${slug(item.prompt)}-#${index + 1}.${guessExt(img.mime)}`;
-  if (window.NativeBridge && typeof window.NativeBridge.download === 'function') {
-    window.NativeBridge.download(img.url, name);
-    return;
+  const key = downloadKey(item, index);
+  if (state.activeDownloads.has(key)) return;
+  const nativeDownload = window.NativeBridge && typeof window.NativeBridge.download === 'function';
+  let remoteUrl = '';
+  let downloadHref = '';
+  if (!nativeDownload) {
+    try {
+      const url = new URL(img.url, window.location.href);
+      if (url.username || url.password) throw new Error('图片地址包含账号或密码，已阻止打开。');
+      if (/^https?:$/.test(url.protocol)) {
+        if (url.origin !== window.location.origin) remoteUrl = url.href;
+        else downloadHref = url.href;
+      } else if (url.protocol === 'data:' && /^data:image\/[a-z0-9.+-]+;base64,/i.test(img.url)) {
+        downloadHref = img.url;
+      } else {
+        throw new Error('图片地址格式不受支持。');
+      }
+    } catch (error) {
+      toast('下载失败：' + (error.message || '图片地址无效'), 'err', 9000);
+      return;
+    }
   }
-  let href = img.url;
-  if (typeof href === 'string' && /^https?:\/\//.test(href)) {
-    href = '/api/download?url=' + encodeURIComponent(img.url) + '&name=' + encodeURIComponent(name);
+  setDownloadBusy(item, index, true);
+  setDownloadFeedback(item, index, '正在准备图片下载…');
+  try {
+    if (nativeDownload) {
+      window.NativeBridge.download(img.url, name);
+    } else if (remoteUrl) {
+      let response;
+      try {
+        response = await fetch('/api/download?url=' + encodeURIComponent(remoteUrl) + '&name=' + encodeURIComponent(name), { credentials: 'same-origin' });
+      } catch (error) {
+        throw new Error('无法从本地服务获取图片：' + (error.message || '网络连接中断'));
+      }
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const payload = await response.clone().json();
+          detail = payload.error || payload.message || '';
+        } catch (_) {}
+        throw new Error('图片下载失败（HTTP ' + response.status + '）' + (detail ? '：' + detail : '。'));
+      }
+      const blob = validateDownloadBlob(await response.blob(), response.headers.get('content-type'));
+      const objectUrl = URL.createObjectURL(blob);
+      try { clickDownload(objectUrl, name); }
+      finally { setTimeout(() => URL.revokeObjectURL(objectUrl), 60000); }
+    } else {
+      clickDownload(downloadHref, name);
+    }
+    setDownloadFeedback(item, index);
+    if (!nativeDownload) toast('已交给浏览器下载，请查看下载列表。', 'ok', 5000);
+  } catch (error) {
+    const message = error.message || '未知错误';
+    setDownloadFeedback(item, index, '下载失败：' + message + '。你可以重试下载，或', remoteUrl);
+    toast('下载失败：' + message + '。原图入口已保留，可稍后重试。', 'err', 9000);
+  } finally {
+    setDownloadBusy(item, index, false);
   }
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
 }
 
 /* ───────────────────────────── 灯箱 ───────────────────────────── */
@@ -1138,6 +1243,8 @@ function openLightbox(item, index) {
   const img = item.images[index];
   if (!img) return;
   state.lbCurrent = { item, index };
+  el.lbDownload.dataset.downloadKey = downloadKey(item, index);
+  el.lbDownload.disabled = state.activeDownloads.has(el.lbDownload.dataset.downloadKey);
   el.lbImage.src = img.url;
   el.lbMeta.textContent = [
     '模型   ' + item.model,
@@ -1237,6 +1344,11 @@ function updatePromptLen() {
 
 function bind() {
 
+  // Keep search and API credentials in separate forms for password managers.
+  // Both actions are handled locally; native submission could expose form data.
+  ['historySearchForm', 'providerSettingsForm'].forEach((id) => {
+    $(id).addEventListener('submit', (event) => event.preventDefault());
+  });
   el.baseUrl.addEventListener('change', updateEndpointPreview);
   el.baseUrl.addEventListener('input', () => { clearTimeout(bind._t); bind._t = setTimeout(updateEndpointPreview, 400); });
   el.btnSettings.addEventListener('click', () => openSettings());
@@ -1395,7 +1507,7 @@ function bind() {
   el.lightbox.addEventListener('click', (e) => { if (e.target === el.lightbox) closeLightbox(); });
   el.lbDownload.addEventListener('click', () => {
     if (!state.lbCurrent) return;
-    downloadImage(state.lbCurrent.item.images[state.lbCurrent.index], state.lbCurrent.item, state.lbCurrent.index);
+    void downloadImage(state.lbCurrent.item.images[state.lbCurrent.index], state.lbCurrent.item, state.lbCurrent.index);
   });
   el.lbCopyPrompt.addEventListener('click', () => { if (state.lbCurrent) copyText(state.lbCurrent.item.prompt); });
   el.lbReuse.addEventListener('click', () => { if (state.lbCurrent) reuseItem(state.lbCurrent.item); });

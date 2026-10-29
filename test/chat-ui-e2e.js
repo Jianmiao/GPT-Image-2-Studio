@@ -11,6 +11,7 @@ const http = require('node:http');
 const { spawn } = require('node:child_process');
 const { makePng } = require('./png');
 const autoModeOnly = process.argv.includes('--auto-mode-only');
+const autofillOnly = process.argv.includes('--autofill-only');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gptimage2-chat-ui-'));
 const dataDir = path.join(root, 'data');
@@ -218,12 +219,55 @@ function closeServer(server) {
     console.log('PASS stale saved edit mode is ignored; mode derives from attachments');
     if (autoModeOnly) return;
     assert.equal(await evaluate('document.getElementById("settingsModal").hidden'), true, 'Settings hidden by default');
+    // Real browser form ownership guards against grouping the history search
+    // with the hidden API-key field. Saved-password UI itself is browser-owned
+    // and is not reproducible with this deliberately empty browser profile.
+    const forms = await evaluate(`(() => {
+      const search = document.getElementById('historySearch'), key = document.getElementById('apiKey'), base = document.getElementById('baseUrl');
+      return { searchForm: search.form?.id, keyForm: key.form?.id, keyFormMethod: key.form?.method, baseForm: base.form?.id,
+        searchFields: search.form ? [...search.form.elements].map(e => e.id) : [],
+        searchType: search.type, searchAutocomplete: search.autocomplete, keyAutocomplete: key.autocomplete, baseType: base.type,
+        defaultModeration: document.querySelector('#moderation option[selected]')?.value };
+    })()`);
+    assert.equal(forms.searchForm, 'historySearchForm', 'History search must have its own form owner');
+    assert.equal(forms.keyForm, 'providerSettingsForm', 'API key must belong only to provider settings');
+    assert.equal(forms.keyFormMethod, 'post', 'Without JavaScript, credentials must still stay out of query strings');
+    assert.equal(forms.baseForm, forms.keyForm);
+    assert.deepEqual(forms.searchFields, ['historySearch'], 'The search form must contain no credential fields');
+    assert.equal(forms.searchType, 'search');
+    assert.equal(forms.searchAutocomplete, 'off');
+    assert.equal(forms.keyAutocomplete, 'new-password', 'Saved login passwords must not be requested as API keys');
+    assert.equal(forms.baseType, 'url', 'Provider URL must not resemble a username input');
+    assert.equal(forms.defaultModeration, 'low', 'New settings start with the supported lower moderation level');
+    await fill('historySearch', 'history filter test');
+    assert.match(await evaluate('document.getElementById("archive").textContent'), /没有找到相关记录/);
+    await evaluate('window.autofillNavigationMarker = true; document.getElementById("historySearch").focus()');
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+    await pause(100);
+    assert.equal(await evaluate('window.autofillNavigationMarker'), true, 'Search Enter must not navigate or submit a query');
+    assert.equal(await evaluate('location.search'), '', 'Search text must stay out of the URL');
+    await fill('historySearch', '');
+    console.log('PASS independent search/credential forms and search Enter without navigation');
     await shot('desktop-empty');
 
     await click('#btnSettings');
     assert.equal(await evaluate('document.getElementById("settingsModal").hidden'), false);
     await fill('baseUrl', configuredUrl);
     await fill('apiKey', KEY);
+    await click('#btnToggleKey');
+    assert.equal(await evaluate('document.getElementById("apiKey").type'), 'text');
+    assert.equal(await evaluate('document.getElementById("apiKey").value'), KEY, 'Key visibility toggle preserves manually entered content');
+    await click('#btnToggleKey');
+    assert.equal(await evaluate('document.getElementById("apiKey").type'), 'password');
+    assert.equal(await evaluate(`(() => {
+      const form = document.getElementById('providerSettingsForm');
+      let prevented = false;
+      form.addEventListener('submit', event => { prevented = event.defaultPrevented; }, { once: true });
+      form.requestSubmit();
+      return prevented;
+    })()`), true, 'Provider form must never submit credentials through native navigation');
+    await fill('moderation', 'auto');
     await fill('modelManual', 'gpt-image-2');
     await fill('proxy', 'off');
     await evaluate('document.getElementById("allowPrivateHost").checked = true');
@@ -236,6 +280,9 @@ function closeServer(server) {
     assert.equal(saved.baseUrl, configuredUrl);
     assert.equal(saved.apiKey, KEY);
     assert.equal(saved.model, 'gpt-image-2');
+    assert.equal(saved.moderation, 'auto', 'An explicitly chosen standard level must still save');
+    assert.equal(await evaluate('document.getElementById("apiKey").value'), '', 'Saving a key clears the visible input');
+    assert.equal(await evaluate('document.getElementById("historySearch").value'), '', 'Settings operations must never populate history search');
     assert.match(await evaluate('document.getElementById("modelLabel").textContent'), /gpt-image-2/);
     assert.equal(await evaluate('document.querySelectorAll("#modelSelect option:not(:disabled)").length'), 2, 'Saving a new provider preserves the models just fetched');
     const originalModels = await evaluate('[...document.getElementById("modelSelect").options].map(e => e.value)');
@@ -257,6 +304,22 @@ function closeServer(server) {
     modelDelay = 0;
     modelIds = originalModels;
     console.log('PASS settings save/cancel, model feedback and model list retention');
+    if (autofillOnly) {
+      await send('Page.reload');
+      await waitFor('document.getElementById("moderation")?.value === "auto"', 'Stored standard moderation reloads');
+      await click('#btnSettings');
+      await fill('moderation', 'low');
+      await click('#btnSaveSettings');
+      await waitFor('document.getElementById("settingsModal").hidden', 'Lower moderation saved');
+      await send('Page.reload');
+      await waitFor('document.getElementById("baseUrl")?.value && document.getElementById("moderation")?.value === "low"', 'Stored lower moderation reloads');
+      assert.equal(await evaluate('document.getElementById("historySearch").value'), '', 'Search starts empty after reload');
+      assert.deepEqual(errors, [], 'Browser runtime errors');
+      assert.deepEqual(blocked, [], 'Only the local test server may be contacted');
+      assert.equal(postCount(), 0, 'Autofill regression must not generate images');
+      console.log('PASS saved moderation reload, empty search, key entry/toggle/clear; no image generation');
+      return;
+    }
 
     await evaluate('document.getElementById("sizeCustom").closest("details").open = true');
     await fill('sizeCustom', '1280 * 720');

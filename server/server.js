@@ -306,7 +306,7 @@ function buildCommonParams(body, cfg) {
     quality: String(body.quality || cfg.quality || 'auto').trim(),
     background: String(body.background || cfg.background || 'auto').trim(),
     outputFormat: String(body.outputFormat || cfg.outputFormat || 'auto').trim(),
-    moderation: String(body.moderation || cfg.moderation || 'auto').trim(),
+    moderation: String(body.moderation || cfg.moderation || store.DEFAULT_CONFIG.moderation).trim(),
     count: Math.max(1, Math.min(10, Number(body.count || cfg.count || 1) || 1)),
     timeoutSeconds: Math.max(30, Math.min(3600, Number(body.timeoutSeconds || cfg.timeoutSeconds || 600))),
     method: String(body.method || cfg.method || 'auto'),
@@ -384,6 +384,7 @@ async function runMethod(method, variant, params, opts, timeoutMs, hooks) {
       };
       if (params.quality && params.quality !== 'auto') fields.quality = params.quality;
       if (params.background && params.background !== 'auto') fields.background = params.background;
+      if (/^gpt-image/i.test(String(params.model)) && params.moderation === 'low') fields.moderation = 'low';
       if (params.outputFormat && params.outputFormat !== 'auto') fields.output_format = params.outputFormat;
       const files = params.images.map((img, i) => ({
         field: 'image',
@@ -715,15 +716,18 @@ async function proxyDownload(req, res, query) {
   const cfg = store.getConfig();
   if (!cfg.allowPrivateHost && relay.isPrivateHost(u.hostname)) { sendJson(res, 403, { error: '禁止访问内网地址' }); return; }
   try {
-    const upstream = await upstreamFetch(u.toString(), { method: 'GET' }, 60000, net.makeFetch(cfg.proxy));
-    if (!upstream.ok) { sendJson(res, upstream.status, { error: '远程下载失败 HTTP ' + upstream.status }); return; }
-    const buf = Buffer.from(await upstream.arrayBuffer());
+    const image = await downloadImage(u.toString(), { fetchImpl: net.makeFetch(cfg.proxy), allowPrivate: cfg.allowPrivateHost });
+    const fallbackName = 'image.' + extFromMime(image.mime);
+    const name = Array.from(String(query.get('name') || fallbackName)
+      .replace(/[\x00-\x1f\x7f/\\:*?"<>|]/g, '_').trim().replace(/^\.+|\.+$/g, ''))
+      .slice(0, 180).join('') || fallbackName;
+    const encodedName = encodeURIComponent(name).replace(/['()*]/g, char => '%' + char.charCodeAt(0).toString(16).toUpperCase());
     res.writeHead(200, {
-      'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
-      'Content-Length': buf.length,
-      'Content-Disposition': 'attachment; filename="' + (query.get('name') || 'image.png') + '"'
+      'Content-Type': image.mime,
+      'Content-Length': image.bytes.length,
+      'Content-Disposition': 'attachment; filename="' + fallbackName + '"; filename*=UTF-8\'\'' + encodedName
     });
-    res.end(buf);
+    res.end(image.bytes);
   } catch (e) {
     sendJson(res, 502, { error: e.message });
   }

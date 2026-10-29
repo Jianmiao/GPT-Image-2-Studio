@@ -257,7 +257,7 @@ function buildImagesPayload(params, method) {
   };
   if (params.quality && params.quality !== 'auto') payload.quality = params.quality;
   if (params.background && params.background !== 'auto') payload.background = params.background;
-  if (params.moderation && params.moderation !== 'auto') payload.moderation = params.moderation;
+  if (/^gpt-image/i.test(String(params.model)) && params.moderation === 'low') payload.moderation = 'low';
   if (params.outputFormat && params.outputFormat !== 'auto') {
     payload.output_format = params.outputFormat;
     if (!/^gpt-image/i.test(String(params.model))) delete payload.output_format;
@@ -271,6 +271,7 @@ function buildResponsesPayload(params) {
   if (params.size && params.size !== 'auto') tool.size = params.size;
   if (params.quality && params.quality !== 'auto') tool.quality = params.quality;
   if (params.background && params.background !== 'auto') tool.background = params.background;
+  if (params.moderation === 'low') tool.moderation = 'low';
   if (params.outputFormat && params.outputFormat !== 'auto') tool.output_format = params.outputFormat;
   const body = {
     model: params.chatModel || params.model,

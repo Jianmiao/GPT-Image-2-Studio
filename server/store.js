@@ -25,7 +25,7 @@ const DEFAULT_CONFIG = {
   background: 'auto',
   outputFormat: 'auto',
   count: 1,
-  moderation: 'auto',
+  moderation: 'low',
   timeoutSeconds: 600,
   method: 'auto',       // auto | images | responses | chat
   editEndpoint: 'auto', // auto | json | multipart
