@@ -257,7 +257,10 @@ public final class PickerInstrumentation extends Instrumentation {
         awaitNode("picker_permission_hint", null);
         awaitNode("picker_files", null);
         screenshot("02-permission-denied");
-        Instrumentation.ActivityMonitor documentPicker = addMonitor(new android.content.IntentFilter(Intent.ACTION_OPEN_DOCUMENT), new Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true);
+        android.content.IntentFilter documentFilter = new android.content.IntentFilter(Intent.ACTION_OPEN_DOCUMENT);
+        documentFilter.addCategory(Intent.CATEGORY_OPENABLE);
+        documentFilter.addDataType("image/*");
+        Instrumentation.ActivityMonitor documentPicker = addMonitor(documentFilter, new Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null), true);
         try {
             clickNode("picker_files", null);
             long deadline = SystemClock.uptimeMillis() + 10000;
