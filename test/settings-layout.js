@@ -37,11 +37,20 @@ let child, ws;
   const { sessionId } = await cdp('Target.attachToTarget', { targetId, flatten: true });
   const send = (method, params) => cdp(method, params, sessionId);
   const evaluate = async expression => { const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (r.exceptionDetails) throw new Error(r.exceptionDetails.text); return r.result.value; };
+  const waitFor = async (expression, label) => {
+    const deadline = Date.now() + 10000;
+    do {
+      if (await evaluate(expression)) return;
+      await pause(50);
+    } while (Date.now() < deadline);
+    const actual = await evaluate("({ready:document.readyState,theme:document.documentElement.dataset.theme,body:document.body&&getComputedStyle(document.body).backgroundColor,field:document.getElementById('method')&&getComputedStyle(document.getElementById('method')).backgroundColor,text:document.getElementById('method')&&getComputedStyle(document.getElementById('method')).color})");
+    assert.fail(label + ' did not settle within 10 seconds: ' + JSON.stringify(actual));
+  };
   await send('Page.enable');
   for (const [width, height] of [[390, 844], [360, 640], [820, 1180], [1440, 1000]]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height, mobile: width < 700, deviceScaleFactor: 1 });
     await send('Page.navigate', { url: origin });
-    for (let i = 0; i < 80 && !await evaluate("!!document.querySelector('#settingsModal .adv')"); i++) await pause(50);
+    await waitFor("document.readyState === 'complete' && !!document.querySelector('#settingsModal .adv')", 'Settings page readiness');
     await evaluate("document.getElementById('settingsModal').hidden=false; document.querySelector('#settingsModal .modal-content').scrollTop=99999");
     await pause(100);
     await evaluate("document.querySelector('#settingsModal .adv > summary').click()");
@@ -55,6 +64,9 @@ let child, ws;
       assert.ok(visible, field + ' remains reachable by scrolling');
     }
     await evaluate("document.getElementById('themePreference').value='light';document.getElementById('themePreference').dispatchEvent(new Event('change'))");
+    // Hosted Edge can expose the new theme attribute before computed styles
+    // settle. Wait for the real rendered colors; keep every exact assertion.
+    await waitFor("document.documentElement.dataset.theme === 'light' && getComputedStyle(document.body).backgroundColor === 'rgb(247, 248, 250)' && getComputedStyle(document.getElementById('method')).backgroundColor === 'rgb(255, 255, 255)' && getComputedStyle(document.getElementById('method')).color === 'rgb(32, 38, 49)'", 'Light theme styles');
     const light = await evaluate("({theme:document.documentElement.dataset.theme,body:getComputedStyle(document.body).backgroundColor,field:getComputedStyle(document.getElementById('method')).backgroundColor,text:getComputedStyle(document.getElementById('method')).color})");
     assert.equal(light.theme, 'light');
     assert.equal(light.body, 'rgb(247, 248, 250)', 'Light canvas is applied');
@@ -75,19 +87,20 @@ let child, ws;
   }
   console.log('PASS advanced settings visible, scrollable and save button reachable');
   await send('Page.reload');
-  for (let i = 0; i < 80 && !await evaluate("document.getElementById('themePreference')?.value==='light'"); i++) await pause(50);
+  await waitFor("document.readyState === 'complete' && document.getElementById('themePreference')?.value === 'light'", 'Saved theme after reload');
   assert.equal(await evaluate("document.documentElement.dataset.theme"), 'light', 'Theme persists across reload');
   await evaluate("document.getElementById('themePreference').value='system';document.getElementById('themePreference').dispatchEvent(new Event('change'))");
   for (const value of ['dark', 'light']) {
     await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value }] });
-    await pause(100);
+    await waitFor(`document.documentElement.dataset.theme === '${value}'`, 'Live system theme');
     assert.equal(await evaluate("document.documentElement.dataset.theme"), value, 'System preference change applies live');
   }
   await evaluate("document.getElementById('themePreference').value='dark';document.getElementById('themePreference').dispatchEvent(new Event('change'))");
+  await waitFor("document.documentElement.dataset.theme === 'dark' && getComputedStyle(document.body).backgroundColor === 'rgb(25, 25, 25)'", 'Dark theme styles');
   assert.equal(await evaluate("getComputedStyle(document.body).backgroundColor"), 'rgb(25, 25, 25)', 'Explicit dark restores original appearance');
   await evaluate("localStorage.removeItem('gptimage2.theme.v1')");
   await send('Page.reload');
-  for (let i = 0; i < 80 && !await evaluate("!!document.getElementById('themePreference')"); i++) await pause(50);
+  await waitFor("document.readyState === 'complete' && !!document.getElementById('themePreference')", 'Default theme after reload');
   assert.equal(await evaluate("document.documentElement.dataset.theme"), 'dark', 'No saved preference preserves the original dark default');
   console.log('PASS light/dark/system themes, live system updates and reload persistence');
   await cdp('Browser.close');

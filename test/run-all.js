@@ -9,6 +9,7 @@ const path = require('path');
 
 const suites = [
   ['前端一致性', 'ui-static-check.js'],
+  ['独立运行环境启动', 'cli-launch.js'],
   ['Android 桥接', 'android-bridge.js'],
   ['主题持久化', 'theme-persistence.js'],
   ['主题本地保存', 'appearance-store.js'],

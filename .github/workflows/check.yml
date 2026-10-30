@@ -19,6 +19,8 @@ jobs:
           node-version: 24
       - name: Run local mock tests
         run: npm test
+      - name: Check image downloads with local fixtures
+        run: node test/frontend-download.js
       - name: Check settings layout and appearance
         run: node test/settings-layout.js
         env:

@@ -26,7 +26,12 @@ function parseArgs(argv) {
 
 function openBrowser(url) {
   try {
-    if (process.platform === 'win32') spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
+    if (process.platform === 'win32') {
+      const shell = process.env.ComSpec || process.env.COMSPEC || (process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'cmd.exe') : 'cmd.exe');
+      const child = spawn(shell, ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true });
+      child.on('error', () => {});
+      child.unref();
+    }
     else if (process.platform === 'darwin') spawn('open', [url], { detached: true, stdio: 'ignore' }).unref();
     else spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
   } catch (_) {}
@@ -36,7 +41,9 @@ function openBrowser(url) {
 function ensureUtf8Console() {
   if (process.platform !== 'win32') return;
   try {
-    spawn('cmd', ['/c', 'chcp 65001 >nul'], { stdio: 'ignore', windowsHide: true, detached: false });
+    const shell = process.env.ComSpec || process.env.COMSPEC || (process.env.SystemRoot ? path.join(process.env.SystemRoot, 'System32', 'cmd.exe') : 'cmd.exe');
+    const child = spawn(shell, ['/c', 'chcp 65001 >nul'], { stdio: 'ignore', windowsHide: true, detached: false });
+    child.on('error', () => {});
   } catch (_) {}
 }
 

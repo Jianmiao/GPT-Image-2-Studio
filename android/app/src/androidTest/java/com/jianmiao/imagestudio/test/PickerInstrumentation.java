@@ -313,30 +313,38 @@ public final class PickerInstrumentation extends Instrumentation {
         java.lang.reflect.Field pickerField = activity.getClass().getDeclaredField("photoPicker");
         pickerField.setAccessible(true);
         Object picker = pickerField.get(activity);
-        if (!(picker instanceof Dialog)) throw new AssertionError("Photo picker dialog is not open");
+        // A WebView tap is delivered asynchronously; an unopened dialog is not a failure yet.
+        if (picker == null) return null;
+        if (!(picker instanceof Dialog)) throw new IllegalStateException("Unexpected photo picker type");
+        if (!((Dialog)picker).isShowing()) return null;
         java.lang.reflect.Field gridField = picker.getClass().getDeclaredField("grid");
         gridField.setAccessible(true);
         Object value = gridField.get(picker);
-        if (!(value instanceof GridView)) throw new AssertionError("Photo picker grid is unavailable");
+        if (value == null) return null;
+        if (!(value instanceof GridView)) throw new IllegalStateException("Unexpected photo picker grid type");
         return (GridView)value;
     }
 
     private List<String> gridPhotoNames(Activity activity) throws Exception {
-        List<String> names = new ArrayList<>();
+        AtomicReference<List<String>> names = new AtomicReference<>();
         AtomicReference<Exception> problem = new AtomicReference<>();
         runOnMainSync(() -> {
             try {
-                android.widget.ListAdapter adapter = getPickerGrid(activity).getAdapter();
+                GridView grid = getPickerGrid(activity);
+                if (grid == null || grid.getAdapter() == null) return;
+                android.widget.ListAdapter adapter = grid.getAdapter();
+                List<String> readyNames = new ArrayList<>();
                 for (int i = 0; i < adapter.getCount(); i++) {
                     Object photo = adapter.getItem(i);
                     java.lang.reflect.Field name = photo.getClass().getDeclaredField("name");
                     name.setAccessible(true);
-                    names.add(String.valueOf(name.get(photo)));
+                    readyNames.add(String.valueOf(name.get(photo)));
                 }
+                names.set(readyNames);
             } catch (Exception error) { problem.set(error); }
         });
         if (problem.get() != null) throw problem.get();
-        return names;
+        return names.get();
     }
 
     private void awaitGridPhotos(Activity activity, String... expectedNames) throws Exception {
@@ -346,18 +354,19 @@ public final class PickerInstrumentation extends Instrumentation {
         long deadline = SystemClock.uptimeMillis() + 20000;
         do {
             actual = gridPhotoNames(activity);
-            java.util.Collections.sort(actual);
-            if (actual.equals(expected)) {
+            if (actual != null) java.util.Collections.sort(actual);
+            if (actual != null && actual.equals(expected)) {
                 check(true, "Photo grid contains exactly " + expected);
                 return;
             }
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
-        throw new AssertionError("Photo grid filter mismatch: expected " + expected + " but got " + actual);
+        throw new AssertionError("Photo grid filter mismatch: expected " + expected + " but got " + (actual == null ? "picker not ready" : actual));
     }
 
     private boolean gridHasPhoto(Activity activity, String name) throws Exception {
-        return gridPhotoNames(activity).contains(name);
+        List<String> names = gridPhotoNames(activity);
+        return names != null && names.contains(name);
     }
 
     private boolean confirmEnabled(Activity activity) throws Exception {
@@ -383,9 +392,11 @@ public final class PickerInstrumentation extends Instrumentation {
         AtomicReference<Object> selectedPhoto = new AtomicReference<>();
         do {
             AtomicReference<Boolean> found = new AtomicReference<>(false);
+            AtomicReference<Exception> problem = new AtomicReference<>();
             runOnMainSync(() -> {
                 try {
                     GridView grid = getPickerGrid(activity);
+                    if (grid == null) return;
                     for (int i = 0; i < grid.getChildCount(); i++) {
                         View child = grid.getChildAt(i);
                         if (!name.equals(String.valueOf(child.getContentDescription()))) continue;
@@ -402,8 +413,9 @@ public final class PickerInstrumentation extends Instrumentation {
                         found.set(true);
                         break;
                     }
-                } catch (Exception ignored) {}
+                } catch (Exception error) { problem.set(error); }
             });
+            if (problem.get() != null) throw problem.get();
             if (found.get()) break;
             SystemClock.sleep(150);
         } while (SystemClock.uptimeMillis() < deadline);
